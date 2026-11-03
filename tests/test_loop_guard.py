@@ -63,6 +63,10 @@ class TestLoopGuard(unittest.TestCase):
         self.assertEqual(decision, "ask")
         self.assertIn("consecutive failures detected", reason)
 
+        # Blocked call never runs, so the breaker must release itself: next call goes through
+        decision, _ = self.guard.check_pre_tool_use(tool_call_3)
+        self.assertEqual(decision, "allow")
+
     def test_recovery_after_success(self):
         tool_call_1 = {"name": "run_command", "args": {"CommandLine": "bad_cmd"}}
         tool_call_2 = {"name": "run_command", "args": {"CommandLine": "good_cmd"}}
