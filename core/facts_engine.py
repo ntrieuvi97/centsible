@@ -72,31 +72,54 @@ def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
 
 def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
     """Determine the appropriate facts.jsonl path."""
-    # 1. Workspace .agents directory if workspace is provided
+    candidates: List[Path] = []
     if workspace_paths:
         for ws in workspace_paths:
             try:
                 ws_path = Path(ws).resolve()
-                if not ws_path.is_dir():
-                    continue
-                candidate = ws_path / ".agents" / "facts.jsonl"
-                if candidate.parent.exists() and candidate.parent.is_dir():
-                    return candidate
-                candidate_root = ws_path / "facts.jsonl"
-                if candidate_root.exists():
-                    return candidate_root
+                if ws_path.is_dir():
+                    candidates.append(ws_path)
             except Exception:
                 continue
 
-    # 2. Current working directory .agents
-    cwd_agents = Path.cwd().resolve() / ".agents" / "facts.jsonl"
-    if cwd_agents.parent.exists() and cwd_agents.parent.is_dir():
-        return cwd_agents
+    try:
+        cwd_path = Path.cwd().resolve()
+        if cwd_path not in candidates:
+            candidates.append(cwd_path)
+    except Exception:
+        pass
 
-    # 3. Global fallback in ~/.gemini/antigravity/facts.jsonl
-    global_dir = Path.home() / ".gemini" / "antigravity"
+    # 1. Project-local directory (.agents/ or .claude/ or root facts.jsonl)
+    for base in candidates:
+        for folder in (".agents", ".claude"):
+            local_dir = base / folder
+            if local_dir.exists() and local_dir.is_dir():
+                return local_dir / "facts.jsonl"
+        root_facts = base / "facts.jsonl"
+        if root_facts.exists():
+            return root_facts
+
+    # 2. Neutral global fallback in ~/.centsible/facts.jsonl
+    env_home = os.environ.get("CENTSIBLE_HOME")
+    global_dir = Path(env_home).expanduser().resolve() if env_home else (Path.home() / ".centsible")
     global_dir.mkdir(parents=True, exist_ok=True)
-    return global_dir / "facts.jsonl"
+    neutral_facts = global_dir / "facts.jsonl"
+
+    # Seamless one-time migration from legacy ~/.gemini/antigravity/facts.jsonl if present
+    if not neutral_facts.exists() and not env_home:
+        legacy_dir = Path.home() / ".gemini" / "antigravity"
+        legacy_facts = legacy_dir / "facts.jsonl"
+        if legacy_facts.exists():
+            try:
+                neutral_facts.write_bytes(legacy_facts.read_bytes())
+                legacy_metrics = legacy_dir / "metrics.json"
+                neutral_metrics = global_dir / "metrics.json"
+                if legacy_metrics.exists() and not neutral_metrics.exists():
+                    neutral_metrics.write_bytes(legacy_metrics.read_bytes())
+            except Exception:
+                pass
+
+    return neutral_facts
 
 
 class FactsEngine:

@@ -3,11 +3,12 @@
 Unit tests for FactsEngine.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
-from core.facts_engine import FactsEngine
+from core.facts_engine import FactsEngine, get_default_facts_path
 
 
 class TestFactsEngine(unittest.TestCase):
@@ -121,6 +122,37 @@ class TestFactsEngine(unittest.TestCase):
         self.assertEqual(len(self.engine.match(nfd_prompt)), 1)
         # 3. Non-diacritic (không dấu, gồm cả đ -> d) fallback match
         self.assertEqual(len(self.engine.match("Hay chay kiem thu va chay do giup toi")), 1)
+
+    def test_get_default_facts_path_resolution(self):
+        with tempfile.TemporaryDirectory() as ws_dir, tempfile.TemporaryDirectory() as global_home:
+            ws_path = Path(ws_dir).resolve()
+            old_env = os.environ.get("CENTSIBLE_HOME")
+            old_cwd = Path.cwd()
+            try:
+                os.environ["CENTSIBLE_HOME"] = global_home
+                os.chdir(ws_path)
+
+                # 1. Neither .agents nor .claude exists -> neutral global path
+                resolved_global = get_default_facts_path([str(ws_path)])
+                self.assertEqual(resolved_global, Path(global_home).resolve() / "facts.jsonl")
+
+                # 2. Only .claude exists -> project .claude/facts.jsonl
+                claude_dir = ws_path / ".claude"
+                claude_dir.mkdir()
+                resolved_claude = get_default_facts_path([str(ws_path)])
+                self.assertEqual(resolved_claude, claude_dir / "facts.jsonl")
+
+                # 3. Both .agents and .claude exist -> .agents/facts.jsonl takes precedence
+                agents_dir = ws_path / ".agents"
+                agents_dir.mkdir()
+                resolved_agents = get_default_facts_path([str(ws_path)])
+                self.assertEqual(resolved_agents, agents_dir / "facts.jsonl")
+            finally:
+                os.chdir(old_cwd)
+                if old_env is None:
+                    os.environ.pop("CENTSIBLE_HOME", None)
+                else:
+                    os.environ["CENTSIBLE_HOME"] = old_env
 
 
 if __name__ == "__main__":
