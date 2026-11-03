@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "te hook claude-prompt"
+            "command": "centsible hook claude-prompt"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "te hook claude-pre-tool"
+            "command": "centsible hook claude-pre-tool"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "te hook claude-post-tool"
+            "command": "centsible hook claude-post-tool"
           }
         ]
       }

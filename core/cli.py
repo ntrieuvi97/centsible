@@ -192,8 +192,8 @@ def handle_hook_claude_post_tool() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="te",
-        description="agy-token-economizer: Token and cost optimizer for Antigravity (AGY)",
+        prog="centsible",
+        description="centsible: Experience-driven cost and token optimizer for AI coding agents",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -268,7 +268,7 @@ def main() -> int:
         if args.facts_action == "list":
             facts = engine.list_facts(category=args.category)
             if not facts:
-                print("No micro-facts stored yet. Add one with 'te facts add --pattern ... --fact ...'")
+                print("No micro-facts stored yet. Add one with 'centsible facts add --pattern ... --fact ...'")
                 return 0
             print(f"Stored Micro-Facts ({len(facts)}):")
             print(f"Path: {engine.storage_path}\n")
@@ -311,7 +311,7 @@ def main() -> int:
     elif args.command == "status":
         facts = engine.list_facts()
         total_hits = sum(f.get("hits", 0) for f in facts)
-        print("=== AGY TokenEconomizer Status ===")
+        print("=== Centsible Status 🪙 ===")
         print(f"• Facts Storage:  {engine.storage_path}")
         print(f"• Total Facts:    {len(facts)}")
         print(f"• Total Hits:     {total_hits}")

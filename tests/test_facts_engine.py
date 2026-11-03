@@ -55,7 +55,7 @@ class TestFactsEngine(unittest.TestCase):
         matched = self.engine.match("bruno")
         msg = self.engine.format_ephemeral_message(matched)
         self.assertIsNotNone(msg)
-        self.assertIn("[TOKEN-ECONOMIZER MICRO-SKILLS: Active Repository Facts]", msg)
+        self.assertIn("[CENTSIBLE MICRO-SKILLS: Active Repository Facts]", msg)
         self.assertIn("- Fact A", msg)
 
         # Empty match returns None
