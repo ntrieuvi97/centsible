@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.loop_guard import LoopGuard, get_state_path
+from core.facts_engine import FactsEngine
+from core.loop_guard import LoopGuard, extract_error_from_payload, get_state_path
 
 
 class TestLoopGuard(unittest.TestCase):
@@ -78,6 +79,38 @@ class TestLoopGuard(unittest.TestCase):
         # Call 3 should be allowed because error count was reset
         decision, reason = self.guard.check_pre_tool_use(tool_call_3)
         self.assertEqual(decision, "allow")
+
+    def test_command_normalization_catches_cosmetic_retries(self):
+        # Changing toolSummary, WaitMsBeforeAsync, or -v/--tb=short should still count as identical
+        call_1 = {"name": "run_command", "args": {"CommandLine": "pytest tests/a.py", "toolSummary": "Run 1", "WaitMsBeforeAsync": 5000}}
+        call_2 = {"name": "run_command", "args": {"CommandLine": "pytest  tests/a.py -v", "toolSummary": "Run 2", "WaitMsBeforeAsync": 3000}}
+        call_3 = {"name": "run_command", "args": {"CommandLine": "pytest tests/a.py --tb=short -q", "toolSummary": "Run 3"}}
+
+        self.assertEqual(self.guard.check_pre_tool_use(call_1)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(call_2)[0], "allow")
+        decision, reason = self.guard.check_pre_tool_use(call_3)
+        self.assertEqual(decision, "ask")
+        self.assertIn("[LoopGuard Alert]", reason)
+
+    def test_extract_error_from_payload_variants(self):
+        self.assertEqual(extract_error_from_payload({"exitCode": 2}), "exit code 2")
+        self.assertEqual(
+            extract_error_from_payload({"output": "Done.\nCommand exited with code 127.\n"}),
+            "exit code 127",
+        )
+        self.assertIsNone(extract_error_from_payload({"output": "Command exited with code 0."}))
+
+    def test_pre_tool_fact_hint_when_uninjected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            engine.add_fact("bruno", "Append --condense to bruno commands", fact_id="f-bruno")
+
+            # Agent calls bruno without --condense when prompt did not inject f-bruno
+            call_missing = {"name": "run_command", "args": {"CommandLine": "bruno run suite"}}
+            decision, reason = self.guard.check_pre_tool_use(call_missing, engine=engine)
+            self.assertEqual(decision, "ask")
+            self.assertIn("[Centsible Micro-Skill Hint]", reason)
+            self.assertIn("--condense", reason)
 
 
 if __name__ == "__main__":

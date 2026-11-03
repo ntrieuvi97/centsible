@@ -98,6 +98,29 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(res3.returncode, 2)
         self.assertIn("[LoopGuard Alert]", res3.stderr)
 
+    def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
+        plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        marketplace_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        hooks_cfg = json.loads((REPO_ROOT / "claude-hooks.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(plugin_manifest["name"], "centsible")
+        self.assertIn("./claude-hooks.json", plugin_manifest["hooks"])
+        self.assertEqual(marketplace_manifest["plugins"][0]["name"], "centsible")
+
+        # Execute the exact shell command from claude-hooks.json with CLAUDE_PLUGIN_ROOT set
+        cmd_str = hooks_cfg["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        env = dict(subprocess.os.environ, CLAUDE_PLUGIN_ROOT=str(REPO_ROOT))
+        res = subprocess.run(
+            cmd_str,
+            shell=True,
+            input=json.dumps({"prompt": "hello", "cwd": self.temp_dir.name}),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(json.loads(res.stdout), {})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "centsible hook claude-prompt"
+            "command": "\"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible\" hook claude-prompt"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "centsible hook claude-pre-tool"
+            "command": "\"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible\" hook claude-pre-tool"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "centsible hook claude-post-tool"
+            "command": "\"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible\" hook claude-post-tool"
           }
         ]
       }
