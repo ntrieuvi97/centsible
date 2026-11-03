@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Experience-driven token and cost optimization plugin for Google Antigravity (AGY)",
   "author": "Antigravity Open Source Community",
-  "homepage": "https://github.com/microsoft/TokenEconomizer",
+  "homepage": "https://github.com/<your-username>/agy-token-economizer",
   "repository": {
     "type": "git",
     "url": "https://github.com/<your-username>/agy-token-economizer"
