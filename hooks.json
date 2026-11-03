@@ -1,0 +1,35 @@
+{
+  "agy-token-economizer": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "./bin/te hook pre-invocation",
+        "timeout": 5
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./bin/te hook pre-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./bin/te hook post-tool",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

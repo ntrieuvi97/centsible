@@ -1,0 +1,49 @@
+---
+name: token-economizer
+description: >-
+  Manage repository-specific micro-facts, inspect token optimization status,
+  and record reusable discoveries to minimize context bloat and token consumption.
+---
+
+# TokenEconomizer Skill
+
+This skill allows the agent and user to manage experience-driven micro-facts and token optimization.
+
+## When to Use
+- User asks about token optimization status or active facts (`te status`, `te facts list`).
+- You resolved a non-trivial repo quirk (e.g. non-standard test runner, mandatory environment flag, path alias) that future turns will need.
+- Testing pattern matching against prompts.
+
+## Commands
+
+### 1. Check Status
+```bash
+./bin/te status
+```
+
+### 2. List Micro-Facts
+```bash
+./bin/te facts list
+```
+
+### 3. Add a Micro-Fact
+Always keep the fact to a single, direct sentence without conversational padding:
+```bash
+./bin/te facts add --pattern "<regex_pattern>" --fact "<one_line_fact>"
+```
+Examples:
+```bash
+./bin/te facts add --pattern "pytest|unit-test" --fact "Run unit tests with 'pytest tests/ -q --tb=short'."
+./bin/te facts add --pattern "bruno|api-test" --fact "Append --condense to Bruno commands to save 80% JSON tokens."
+```
+
+### 4. Test Fact Matching
+Verify what facts trigger for a specific user prompt:
+```bash
+./bin/te facts test "How do I run the bruno tests?"
+```
+
+### 5. Remove Stale Fact
+```bash
+./bin/te facts remove <id_or_pattern>
+```
