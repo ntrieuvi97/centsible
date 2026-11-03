@@ -26,6 +26,45 @@ TRIVIAL_CLI_FLAGS_RE = re.compile(
 )
 
 
+# config key -> (env var, default). Resolution order: env var, then config.json, then default.
+CONFIG_KEYS = {
+    "max_consecutive_errors": ("CENTSIBLE_MAX_CONSECUTIVE_ERRORS", 2),
+    "max_identical_calls": ("CENTSIBLE_MAX_IDENTICAL_CALLS", 3),
+}
+
+
+def get_config_path() -> Path:
+    env_home = os.environ.get("CENTSIBLE_HOME")
+    return (Path(env_home).expanduser() if env_home else Path.home() / ".centsible") / "config.json"
+
+
+def load_config() -> Dict[str, Any]:
+    try:
+        data = json.loads(get_config_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_config(cfg: Dict[str, Any]) -> None:
+    path = get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+
+def resolve_threshold(key: str) -> int:
+    """Positive int from env var, else config.json, else default; invalid values are skipped."""
+    env_name, default = CONFIG_KEYS[key]
+    for raw in (os.environ.get(env_name), load_config().get(key)):
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if value >= 1:
+            return value
+    return default
+
+
 def normalize_command(cmd: str) -> str:
     """Normalize CLI command string by stripping cosmetic flags and extra whitespace."""
     if not cmd:
@@ -94,13 +133,14 @@ class LoopGuard:
     def __init__(
         self,
         conversation_id: Optional[str] = None,
-        max_identical_calls: int = 3,
-        max_consecutive_errors: int = 2,
+        max_identical_calls: Optional[int] = None,
+        max_consecutive_errors: Optional[int] = None,
     ):
         self.conversation_id = conversation_id
         self.state_path = get_state_path(conversation_id)
-        self.max_identical_calls = max_identical_calls
-        self.max_consecutive_errors = max_consecutive_errors
+        # Explicit args win, then env vars, then ~/.centsible/config.json, then the built-in defaults.
+        self.max_identical_calls = max_identical_calls or resolve_threshold("max_identical_calls")
+        self.max_consecutive_errors = max_consecutive_errors or resolve_threshold("max_consecutive_errors")
 
     def _default_state(self) -> Dict[str, Any]:
         return {

@@ -39,6 +39,16 @@ class TestCliIntegration(unittest.TestCase):
         )
         return result
 
+    def test_config_cli(self):
+        env = {"CENTSIBLE_HOME": self.temp_dir.name, "CENTSIBLE_MAX_CONSECUTIVE_ERRORS": ""}
+        res = self._run_te(["config", "set", "max_consecutive_errors", "4"], env=env)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("max_consecutive_errors = 4", res.stdout)
+        self.assertIn("max_consecutive_errors = 4", self._run_te(["config", "list"], env=env).stdout)
+        self.assertNotEqual(self._run_te(["config", "set", "max_identical_calls", "0"], env=env).returncode, 0)
+        res = self._run_te(["config", "unset", "max_consecutive_errors"], env=env)
+        self.assertIn("max_consecutive_errors = 2", res.stdout)
+
     def test_facts_crud_cli(self):
         # 1. Add fact
         res_add = self._run_te([

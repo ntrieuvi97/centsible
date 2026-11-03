@@ -3,6 +3,7 @@
 Unit tests for LoopGuard.
 """
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,30 @@ class TestLoopGuard(unittest.TestCase):
 
     def tearDown(self):
         self.guard.reset()
+
+    def test_thresholds_from_env(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as home:
+            env = {
+                "CENTSIBLE_HOME": home,
+                "CENTSIBLE_MAX_CONSECUTIVE_ERRORS": "5",
+                "CENTSIBLE_MAX_IDENTICAL_CALLS": "bogus",
+            }
+            with mock.patch.dict("os.environ", env):
+                g = LoopGuard(conversation_id=self.conv_id)
+            self.assertEqual(g.max_consecutive_errors, 5)
+            self.assertEqual(g.max_identical_calls, 3)
+
+    def test_thresholds_from_config_file(self):
+        from unittest import mock
+        from core.loop_guard import save_config
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict("os.environ", {"CENTSIBLE_HOME": home}, clear=False):
+                os.environ.pop("CENTSIBLE_MAX_CONSECUTIVE_ERRORS", None)
+                save_config({"max_consecutive_errors": 4, "max_identical_calls": 0})
+                g = LoopGuard(conversation_id=self.conv_id)
+            self.assertEqual(g.max_consecutive_errors, 4)
+            self.assertEqual(g.max_identical_calls, 3)
 
     def test_allow_first_and_second_identical_call(self):
         tool_call = {
