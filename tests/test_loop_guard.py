@@ -134,6 +134,23 @@ class TestLoopGuard(unittest.TestCase):
             self.assertIn("[Centsible Micro-Skill Hint]", reason)
             self.assertIn("--condense", reason)
 
+            # File/module gotcha returns 'allow' with hint (smooth injection without blocking Edit/Read)
+            engine.add_fact(
+                "compositor.py",
+                "Keep floating_cards intact in AnimeLayerCompositor",
+                category="gotcha",
+                fact_id="f-gotcha",
+            )
+            edit_call = {"name": "Edit", "args": {"file_path": "/app/src/compositor.py"}}
+            decision_g, reason_g = self.guard.check_pre_tool_use(edit_call, engine=engine)
+            self.assertEqual(decision_g, "allow")
+            self.assertIn("floating_cards", reason_g)
+
+            # Second Edit in same session does not re-inject the same gotcha
+            decision_g2, reason_g2 = self.guard.check_pre_tool_use(edit_call, engine=engine)
+            self.assertEqual(decision_g2, "allow")
+            self.assertIsNone(reason_g2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -228,7 +228,11 @@ class LoopGuard:
                     f"[Centsible Micro-Skill Hint] Before executing '{tool_name}', "
                     f"apply verified repository fact: {facts_str}"
                 )
-                return "ask", reason
+                cmd_arg = args.get("CommandLine") or args.get("command")
+                is_blocking_cli_hint = bool(
+                    cmd_arg and any(f.get("category", "general") not in ("rule", "gotcha") for f in uninjected)
+                )
+                return ("ask" if is_blocking_cli_hint else "allow"), reason
 
         self._save_state(state)
         return "allow", None

@@ -190,6 +190,88 @@ def _extract_invocation_signature(cmd: str, target_bin: str) -> Optional[tuple]:
     return None
 
 
+_QUESTION_START_RE = re.compile(
+    r"^\s*(?:tại sao|vì sao|làm sao|như thế nào|có nên|khi nào|ở đâu|ai\b|cái gì|"
+    r"why|how|what|when|where|who|should|can|could|would)\b",
+    re.IGNORECASE,
+)
+
+_CORRECTION_TRIGGER_RE = re.compile(
+    r"(?:^|\b)(?:"
+    r"không phải|sai rồi|nhầm rồi|"
+    r"đừng\s+(?:dùng|sửa|chạy|xóa|gọi|đụng|thay đổi)|"
+    r"tuyệt đối không|cấm\s+(?:dùng|sửa|chạy|xóa)|"
+    r"lưu ý(?:\s*:|\s+là)?|nhớ\s+là|quy tắc(?:\s*:|\s+là)?|"
+    r"bắt buộc\s+phải|luôn\s+phải|mặc định\s+(?:là|phải)|"
+    r"no,\s*(?:use|don't|do not|never|always)|"
+    r"don't\s+(?:use|edit|modify|touch|run)|"
+    r"do not\s+(?:use|edit|modify|touch|run)|"
+    r"never\s+(?:use|edit|modify|touch|run)|"
+    r"always\s+(?:use|run|keep|pass)|"
+    r"remember\s+(?:to|that)|gotcha:|rule:"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _extract_correction_targets(prompt: str) -> List[str]:
+    """Extract technical identifiers (files, backticked symbols, known CLI tools, CamelCase/hyphenated modules)."""
+    targets: List[str] = []
+
+    def _add(tok: str) -> None:
+        clean = tok.strip().strip("`'\".,;:()[]{}")
+        if clean and len(clean) >= 2 and clean not in targets:
+            targets.append(clean)
+
+    # 1. File names with common code/config extensions
+    for m in re.finditer(
+        r"\b([a-zA-Z0-9_.-]+\.(?:py|ts|tsx|js|jsx|rs|go|java|kt|rb|php|sql|prisma|json|yaml|yml|toml|sh|md|vue|svelte))\b",
+        prompt,
+    ):
+        _add(m.group(1))
+
+    # 2. Backticked identifiers (single token)
+    for m in re.finditer(r"`([a-zA-Z0-9_./-]+)`", prompt):
+        _add(m.group(1))
+
+    # 3. CamelCase class/component identifiers (e.g. AnimeLayerCompositor)
+    for m in re.finditer(r"\b([A-Z][a-z0-9]+(?:[A-Z][a-zA-Z0-9]+)+)\b", prompt):
+        _add(m.group(1))
+
+    # 4. Known CLI binaries in COMMON_BINS
+    for word in re.findall(r"\b[a-zA-Z0-9_-]+\b", prompt):
+        if word.lower() in COMMON_BINS:
+            _add(word.lower())
+
+    # 5. Hyphenated or snake_case module/feature identifiers (e.g. video-agent, floating_cards)
+    for m in re.finditer(r"(?<![-\w])([a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+)\b", prompt):
+        _add(m.group(1))
+
+    return targets
+
+
+def detect_user_correction(prompt: str) -> Optional[str]:
+    """
+    Detect if a user prompt states a correction, rule, or gotcha.
+    Returns a concise capture nudge if detected, or None.
+    """
+    if not prompt or "?" in prompt:
+        return None
+    norm = normalize_text(prompt.strip())
+    if len(norm) < 12 or _QUESTION_START_RE.search(norm):
+        return None
+    if not _CORRECTION_TRIGGER_RE.search(norm):
+        return None
+    targets = _extract_correction_targets(norm)
+    if not targets:
+        return None
+    suggested_pattern = "|".join(targets[:2])
+    return (
+        f"[Centsible Correction Detected] Persist this rule/gotcha if verified: "
+        f"`centsible facts add --pattern \"{suggested_pattern}\" --fact \"<concise_rule>\" --category gotcha`"
+    )
+
+
 class FactsEngine:
     def __init__(self, storage_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
@@ -256,6 +338,10 @@ class FactsEngine:
             m["saved_discovery_tokens"],
             sum(f.get("saved_tokens", f.get("hits", 0) * DEFAULT_SAVED_TOKENS_PER_HIT) for f in facts),
         )
+        auto_learned_count = max(
+            m["auto_learned_facts"],
+            sum(1 for f in facts if f.get("category") in ("auto-learned", "gotcha") and str(f.get("id", "")).startswith("auto_")),
+        )
         saved_loop = m["saved_loop_tokens"]
         gross_saved = saved_discovery + saved_loop
         net_saved = gross_saved - injected_tokens
@@ -268,6 +354,7 @@ class FactsEngine:
 
         return {
             **m,
+            "auto_learned_facts": auto_learned_count,
             "total_facts": len(facts),
             "fact_hits": fact_hits,
             "injected_tokens": injected_tokens,
@@ -429,17 +516,25 @@ class FactsEngine:
         """
         Match a tool call's command/arguments against stored micro-facts.
         Catches facts that were not triggered by the user prompt (e.g. user said 'fix bug'
-        and agent runs 'bruno' or 'pytest' mid-turn without required flags).
+        and agent runs 'bruno' or 'pytest' mid-turn without required flags, or edits a file
+        governed by an architectural rule/gotcha).
         """
         args = tool_call.get("args") or {}
         cmd_text = (
             args.get("CommandLine")
             or args.get("command")
-            or args.get("Path")
-            or args.get("file_path")
             or ""
         )
-        if not cmd_text:
+        path_text = (
+            args.get("Path")
+            or args.get("file_path")
+            or args.get("path")
+            or args.get("TargetFile")
+            or args.get("SearchPath")
+            or ""
+        )
+        target_text = f"{cmd_text} {path_text}".strip()
+        if not target_text:
             return []
 
         excluded = set(exclude_ids or [])
@@ -456,10 +551,14 @@ class FactsEngine:
             pattern = f.get("pattern", "")
             if not pattern or pattern == "*":
                 continue
+            category = f.get("category", "general")
             try:
-                if regex_matches(pattern, cmd_text):
-                    if only_missing_flags and not is_fact_missing_in_command(f.get("fact", ""), cmd_text):
-                        continue
+                if regex_matches(pattern, target_text):
+                    # For CLI commands with non-rule/gotcha facts, only fire if prescribed flags/subcommands are missing.
+                    # For file/path tools (Read/Edit/Write) or explicit 'rule'/'gotcha' facts, fire once per session!
+                    if cmd_text and category not in ("rule", "gotcha"):
+                        if only_missing_flags and not is_fact_missing_in_command(f.get("fact", ""), cmd_text):
+                            continue
                     matched.append(f)
                     if record_hits:
                         tok_cost = estimate_tokens(f.get("fact", "")) + 4
@@ -517,17 +616,59 @@ class FactsEngine:
         self.update_metrics(auto_learned_facts=1)
         return entry
 
-    def format_ephemeral_message(self, matched_facts: List[Dict]) -> Optional[str]:
-        """Format matched facts into a single concise prompt injection block."""
-        if not matched_facts:
+    def auto_learn_from_correction(self, prompt: str) -> Optional[Dict]:
+        """
+        Automatically extract and store a domain/file 'gotcha' micro-fact when the user explicitly
+        states a concise correction or rule with concrete technical targets (files, modules, CLI tools).
+        """
+        if not prompt or "?" in prompt:
+            return None
+        norm = normalize_text(prompt.strip().replace("\n", " "))
+        # Only auto-persist concise single-rule directives (15..240 chars), never questions or long logs
+        if len(norm) < 15 or len(norm) > 240 or _QUESTION_START_RE.search(norm):
+            return None
+        if not _CORRECTION_TRIGGER_RE.search(norm):
             return None
 
-        lines = [
-            "[CENTSIBLE MICRO-SKILLS: Active Repository Facts]",
-            "Apply the following verified facts for this turn to avoid repetitive search/execution:",
-        ]
-        for f in matched_facts:
-            lines.append(f"- {f.get('fact')}")
+        targets = _extract_correction_targets(norm)
+        if not targets:
+            return None
+
+        pattern = "|".join(targets[:2])
+        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", targets[0])[:32]
+        fact_id = f"auto_gotcha_{slug}"
+
+        # Avoid overwriting manual facts with the same pattern
+        for existing in self.list_facts():
+            if existing.get("pattern") == pattern and not str(existing.get("id", "")).startswith("auto_"):
+                return None
+
+        entry = self.add_fact(
+            pattern=pattern,
+            fact=norm,
+            category="gotcha",
+            fact_id=fact_id,
+        )
+        self.update_metrics(auto_learned_facts=1)
+        return entry
+
+    def format_ephemeral_message(
+        self,
+        matched_facts: List[Dict],
+        correction_hint: Optional[str] = None,
+    ) -> Optional[str]:
+        """Format matched facts and optional correction nudge into a single concise prompt injection block."""
+        if not matched_facts and not correction_hint:
+            return None
+
+        lines: List[str] = []
+        if matched_facts:
+            lines.append("[CENTSIBLE MICRO-SKILLS: Active Repository Facts]")
+            lines.append("Apply the following verified facts for this turn to avoid repetitive search/execution:")
+            for f in matched_facts:
+                lines.append(f"- {f.get('fact')}")
+        if correction_hint:
+            lines.append(correction_hint)
 
         return "\n".join(lines)
 
