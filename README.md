@@ -34,8 +34,15 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
   Monitors tool invocations with CLI flag & metadata normalization (stripping cosmetic retries like `-v`, `-q`, `--tb=short`, or `toolSummary` changes) and deep error extraction (`exitCode`, `is_error`, shell exit markers). If an identical command is issued 3 times or 2 consecutive failures occur, it halts execution:
   - In **Antigravity**: prompts confirmation via decision `"ask"`.
   - In **Claude Code**: blocks the action immediately with exit code `2`.
-  - Thresholds are configurable from the CLI or the `/centsible-config` slash command: `centsible config list | get <key> | set <key> <n> | unset <key>` (stored in `~/.centsible/config.json`, or `$CENTSIBLE_HOME/config.json`).
-  - Or via env vars (these override `config.json`) `CENTSIBLE_MAX_IDENTICAL_CALLS` (default `3`) and `CENTSIBLE_MAX_CONSECUTIVE_ERRORS` (default `2`); e.g. `"env": {"CENTSIBLE_MAX_CONSECUTIVE_ERRORS": "4"}` in `~/.claude/settings.json`. Invalid or `< 1` values fall back to the defaults.
+  - Pick a strictness **mode** from the CLI or the `/centsible-config` slash command: `centsible config mode ultra|normal|weak` (stored in `~/.centsible/config.json`, or `$CENTSIBLE_HOME/config.json`; env `CENTSIBLE_LOOP_MODE` overrides it):
+
+    | Mode | Consecutive errors | Identical calls |
+    |------|--------------------|-----------------|
+    | `ultra` (strict) | 2 | 3 |
+    | `normal` (default) | 3 | 4 |
+    | `weak` (tolerant) | 4 | 5 |
+
+  - Fine-tune with `centsible config set <key> <n>` / `unset <key>`; numeric values override the mode. Or via env vars (these override `config.json`) `CENTSIBLE_LOOP_MODE`, `CENTSIBLE_MAX_IDENTICAL_CALLS` and `CENTSIBLE_MAX_CONSECUTIVE_ERRORS`; e.g. `"env": {"CENTSIBLE_MAX_CONSECUTIVE_ERRORS": "4"}` in `~/.claude/settings.json`. Invalid values are ignored.
 * 📊 **Real-Time Token ROI & Session Transcript Analytics:**
   Tracks exact ephemeral token overhead vs. discovery and loop-intervention tokens saved, converting net savings into cents (`¢`) / USD (`$`), ROI multiplier, First-Try Command Success Rate (%), and offline JSONL session transcript diagnostics (`centsible stats --transcript`).
 * 🤝 **Shared Knowledge & Zero External Dependencies:**

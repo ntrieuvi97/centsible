@@ -96,10 +96,14 @@ class TestClaudeIntegration(unittest.TestCase):
         res2 = self._run_te(["hook", "claude-pre-tool"], stdin_data=stdin_str)
         self.assertEqual(res2.returncode, 0)
 
-        # Call 3 -> exit 2 (Claude Code block code) + stderr
+        # Call 3 -> exit 0 (default normal mode allows 3 identical calls)
         res3 = self._run_te(["hook", "claude-pre-tool"], stdin_data=stdin_str)
-        self.assertEqual(res3.returncode, 2)
-        self.assertIn("[LoopGuard Alert]", res3.stderr)
+        self.assertEqual(res3.returncode, 0)
+
+        # Call 4 -> exit 2 (Claude Code block code) + stderr
+        res4 = self._run_te(["hook", "claude-pre-tool"], stdin_data=stdin_str)
+        self.assertEqual(res4.returncode, 2)
+        self.assertIn("[LoopGuard Alert]", res4.stderr)
 
     def test_claude_failure_then_success_auto_learns_fact(self):
         sid = f"claude_learn_{id(self)}"

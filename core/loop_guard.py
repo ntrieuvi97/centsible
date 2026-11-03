@@ -26,10 +26,18 @@ TRIVIAL_CLI_FLAGS_RE = re.compile(
 )
 
 
-# config key -> (env var, default). Resolution order: env var, then config.json, then default.
+# config key -> env var. Numeric keys override the mode preset.
 CONFIG_KEYS = {
-    "max_consecutive_errors": ("CENTSIBLE_MAX_CONSECUTIVE_ERRORS", 2),
-    "max_identical_calls": ("CENTSIBLE_MAX_IDENTICAL_CALLS", 3),
+    "max_consecutive_errors": "CENTSIBLE_MAX_CONSECUTIVE_ERRORS",
+    "max_identical_calls": "CENTSIBLE_MAX_IDENTICAL_CALLS",
+}
+MODE_ENV = "CENTSIBLE_LOOP_MODE"
+DEFAULT_MODE = "normal"
+# ultra = trips early, weak = tolerant of long debugging streaks.
+MODES = {
+    "ultra": {"max_consecutive_errors": 2, "max_identical_calls": 3},
+    "normal": {"max_consecutive_errors": 3, "max_identical_calls": 4},
+    "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5},
 }
 
 
@@ -52,17 +60,24 @@ def save_config(cfg: Dict[str, Any]) -> None:
     path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 
+def resolve_mode() -> str:
+    """Mode from env var, else config.json, else normal; unknown names are skipped."""
+    for raw in (os.environ.get(MODE_ENV), load_config().get("mode")):
+        if raw in MODES:
+            return raw
+    return DEFAULT_MODE
+
+
 def resolve_threshold(key: str) -> int:
-    """Positive int from env var, else config.json, else default; invalid values are skipped."""
-    env_name, default = CONFIG_KEYS[key]
-    for raw in (os.environ.get(env_name), load_config().get(key)):
+    """Positive int from env var, else config.json, else the active mode's preset; invalid values are skipped."""
+    for raw in (os.environ.get(CONFIG_KEYS[key]), load_config().get(key)):
         try:
             value = int(raw)
         except (TypeError, ValueError):
             continue
         if value >= 1:
             return value
-    return default
+    return MODES[resolve_mode()][key]
 
 
 def normalize_command(cmd: str) -> str:
@@ -138,7 +153,7 @@ class LoopGuard:
     ):
         self.conversation_id = conversation_id
         self.state_path = get_state_path(conversation_id)
-        # Explicit args win, then env vars, then ~/.centsible/config.json, then the built-in defaults.
+        # Explicit args win, then numeric env/config overrides, then the active mode preset.
         self.max_identical_calls = max_identical_calls or resolve_threshold("max_identical_calls")
         self.max_consecutive_errors = max_consecutive_errors or resolve_threshold("max_consecutive_errors")
 
