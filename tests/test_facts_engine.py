@@ -132,6 +132,25 @@ class TestFactsEngine(unittest.TestCase):
         valid_call = {"name": "Bash", "args": {"command": "pytest tests/ -q"}}
         self.assertEqual(self.engine.match_tool_call(valid_call), [])
 
+    def test_auto_learn_from_correction_and_file_gotcha_matching(self):
+        # 1. Questions must never be treated as corrections
+        self.assertIsNone(self.engine.auto_learn_from_correction("tại sao lượt auto learn chỉ có 1 vậy"))
+        self.assertIsNone(self.engine.auto_learn_from_correction("có nên mở rộng fact cho llm context không?"))
+
+        # 2. Explicit user correction with file/module targets auto-learns a 'gotcha'
+        learned = self.engine.auto_learn_from_correction(
+            "Đừng sửa file legacy_auth.py, bắt buộc phải sửa ở jwt_middleware.py"
+        )
+        self.assertIsNotNone(learned)
+        self.assertEqual(learned["category"], "gotcha")
+        self.assertEqual(learned["pattern"], "legacy_auth.py|jwt_middleware.py")
+
+        # 3. File tool (Edit/Read) touching legacy_auth.py triggers the gotcha mid-turn without CLI flags
+        edit_call = {"name": "Edit", "args": {"file_path": "/workspace/src/legacy_auth.py"}}
+        matched = self.engine.match_tool_call(edit_call)
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["id"], learned["id"])
+
     def test_vietnamese_nfc_nfd_and_accent_insensitive_matching(self):
         import unicodedata
 

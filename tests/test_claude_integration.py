@@ -120,6 +120,36 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual([f["category"] for f in facts], ["auto-learned"])
         get_state_path(sid).unlink(missing_ok=True)
 
+    def test_claude_user_correction_and_smooth_pre_tool_gotcha_injection(self):
+        sid = f"claude_gotcha_{id(self)}"
+        # 1. User submits a correction prompt in session 1
+        prompt_payload = json.dumps({
+            "prompt": "Lưu ý: đừng sửa legacy_auth.py, phải sửa ở jwt_middleware.py",
+            "cwd": self.temp_dir.name,
+            "session_id": sid,
+        })
+        res = self._run_te(["hook", "claude-prompt"], prompt_payload)
+        self.assertEqual(res.returncode, 0)
+        out = json.loads(res.stdout)
+        self.assertIn("Auto-Learned Gotcha", out["hookSpecificOutput"]["additionalContext"])
+
+        # 2. In a new session, user says 'fix login bug' and Claude edits legacy_auth.py
+        sid2 = f"claude_gotcha_s2_{id(self)}"
+        pre_payload = json.dumps({
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "/app/src/legacy_auth.py"},
+            "cwd": self.temp_dir.name,
+            "session_id": sid2,
+        })
+        res2 = self._run_te(["hook", "claude-pre-tool"], pre_payload)
+        # Must exit 0 (not block Edit) while injecting additionalContext
+        self.assertEqual(res2.returncode, 0)
+        out2 = json.loads(res2.stdout)
+        self.assertEqual(out2["hookSpecificOutput"]["permissionDecision"], "allow")
+        self.assertIn("jwt_middleware.py", out2["hookSpecificOutput"]["additionalContext"])
+        get_state_path(sid).unlink(missing_ok=True)
+        get_state_path(sid2).unlink(missing_ok=True)
+
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
         plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         marketplace_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))

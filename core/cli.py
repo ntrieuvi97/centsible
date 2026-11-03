@@ -15,7 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, get_default_facts_path
+from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, get_default_facts_path
 from core.loop_guard import LoopGuard, extract_error_from_payload
 
 
@@ -138,13 +138,23 @@ def handle_hook_pre_invocation() -> None:
 
     facts_path = get_default_facts_path(workspace_paths)
     engine = FactsEngine(facts_path)
+    guard = LoopGuard(conversation_id)
 
     matched = engine.match(user_input, record_hits=True)
     if matched:
-        guard = LoopGuard(conversation_id)
         guard.record_injected_facts([f.get("id", "") for f in matched])
 
-    ephemeral_msg = engine.format_ephemeral_message(matched)
+    learned_gotcha = engine.auto_learn_from_correction(user_input)
+    if learned_gotcha:
+        guard.record_injected_facts([learned_gotcha.get("id", "")])
+        correction_hint: Optional[str] = (
+            f"[Centsible Auto-Learned Gotcha] Saved [{learned_gotcha['id']}] "
+            f"(trigger: {learned_gotcha['pattern']})"
+        )
+    else:
+        correction_hint = detect_user_correction(user_input)
+
+    ephemeral_msg = engine.format_ephemeral_message(matched, correction_hint=correction_hint)
 
     output: Dict[str, Any] = {}
     if ephemeral_msg:
@@ -228,13 +238,23 @@ def handle_hook_claude_prompt() -> None:
 
     facts_path = get_default_facts_path([cwd])
     engine = FactsEngine(facts_path)
+    guard = LoopGuard(session_id)
 
     matched = engine.match(user_prompt, record_hits=True)
     if matched:
-        guard = LoopGuard(session_id)
         guard.record_injected_facts([f.get("id", "") for f in matched])
 
-    context_msg = engine.format_ephemeral_message(matched)
+    learned_gotcha = engine.auto_learn_from_correction(user_prompt)
+    if learned_gotcha:
+        guard.record_injected_facts([learned_gotcha.get("id", "")])
+        correction_hint: Optional[str] = (
+            f"[Centsible Auto-Learned Gotcha] Saved [{learned_gotcha['id']}] "
+            f"(trigger: {learned_gotcha['pattern']})"
+        )
+    else:
+        correction_hint = detect_user_correction(user_prompt)
+
+    context_msg = engine.format_ephemeral_message(matched, correction_hint=correction_hint)
 
     output: Dict[str, Any] = {}
     if context_msg:
@@ -251,7 +271,7 @@ def handle_hook_claude_prompt() -> None:
 def handle_hook_claude_pre_tool() -> None:
     """
     Claude Code Hook: PreToolUse.
-    Checks LoopGuard and uninjected tool facts; exits 2 if blocked, exits 0 if allowed.
+    Checks LoopGuard and uninjected tool facts; exits 2 if blocked, exits 0 with additionalContext if allowed.
     """
     try:
         raw_input = sys.stdin.read()
@@ -278,6 +298,18 @@ def handle_hook_claude_pre_tool() -> None:
         sys.stderr.write(f"\n{reason}\n")
         sys.stderr.flush()
         sys.exit(2)
+
+    if decision == "allow" and reason:
+        # Smoothly inject file/module rules & gotchas without aborting Read/Edit
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "additionalContext": reason,
+            }
+        }
+        sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
 
     sys.exit(0)
 
@@ -410,7 +442,7 @@ def main() -> int:
             print(f"Stored Micro-Facts ({len(facts)}):")
             print(f"Path: {engine.storage_path}\n")
             for f in facts:
-                print(f"• [{f.get('id')}] (hits: {f.get('hits', 0)})")
+                print(f"• [{f.get('id')}] (category: {f.get('category', 'general')}, hits: {f.get('hits', 0)})")
                 print(f"  Pattern: {f.get('pattern')}")
                 print(f"  Fact:    {f.get('fact')}\n")
             return 0
