@@ -90,7 +90,11 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
         pass
 
     # 1. Project-local directory (.agents/ or .claude/ or root facts.jsonl)
+    home = Path.home().resolve()
     for base in candidates:
+        # ~/.agents and ~/.claude are global tool dirs, not a project workspace
+        if base == home:
+            continue
         for folder in (".agents", ".claude"):
             local_dir = base / folder
             if local_dir.exists() and local_dir.is_dir():
