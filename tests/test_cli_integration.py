@@ -114,6 +114,19 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("Loop Guard:     Enabled", res.stdout)
         self.assertIn("Tokens Saved:", res.stdout)
 
+    def test_symlinked_bin_execution(self):
+        # Verify bin/centsible works when invoked via a symlink in another directory (e.g. ~/.local/bin/centsible)
+        symlink_path = Path(self.temp_dir.name) / "centsible_link"
+        symlink_path.symlink_to(REPO_ROOT / "bin" / "centsible")
+        res = subprocess.run(
+            [str(symlink_path), "stats"],
+            capture_output=True,
+            text=True,
+            cwd=self.temp_dir.name,
+        )
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("=== Centsible Efficiency & ROI Report", res.stdout)
+
     def test_stats_and_transcript_analysis(self):
         # 1. Seed a fact and trigger a hit
         self._run_te([
