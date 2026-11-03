@@ -110,7 +110,7 @@ class TestCliIntegration(unittest.TestCase):
     def test_status_command(self):
         res = self._run_te(["status"])
         self.assertEqual(res.returncode, 0)
-        self.assertIn("=== AGY TokenEconomizer Status ===", res.stdout)
+        self.assertIn("=== Centsible Status", res.stdout)
         self.assertIn("Loop Guard:     Enabled", res.stdout)
 
 

@@ -172,7 +172,7 @@ class FactsEngine:
             return None
 
         lines = [
-            "[TOKEN-ECONOMIZER MICRO-SKILLS: Active Repository Facts]",
+            "[CENTSIBLE MICRO-SKILLS: Active Repository Facts]",
             "Apply the following verified facts for this turn to avoid repetitive search/execution:",
         ]
         for f in matched_facts:

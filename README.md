@@ -1,12 +1,12 @@
-# agy-token-economizer ⚡
+# centsible 🪙⚡
 
-> **Experience-driven cost and token optimization plugin for Google Antigravity (AGY) & Claude Code**  
-> *Inspired by Microsoft Research's TokenEconomizer philosophy, unified natively across both agent runtimes.*
+> **Experience-driven cost and token optimization for AI coding agents (Antigravity & Claude Code)**  
+> *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero External Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
-[![Dual Runtime: AGY + Claude Code](https://img.shields.io/badge/Runtimes-AGY%20%7C%20Claude%20Code-purple.svg)](#)
+[![Dual Runtime: AGY + Claude Code](https://img.shields.io/badge/Runtimes-Antigravity%20%7C%20Claude%20Code-purple.svg)](#)
 
 ---
 
@@ -19,9 +19,9 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
 
 ---
 
-## 💡 How It Solves It
+## 💡 How Centsible Solves It
 
-`agy-token-economizer` operates as a lightweight, zero-dependency controller sharing a single source of truth (`.agents/facts.jsonl`) across both **Google Antigravity** and **Claude Code**:
+`centsible` operates as a lightweight, zero-dependency controller sharing a single source of truth (`.agents/facts.jsonl`) across both **Google Antigravity** and **Claude Code**:
 
 * 🧩 **Zero-Bloat Micro-Skills:**
   Learns concise, 1-line repository facts with regex triggers. When a user prompt matches a trigger, the fact is injected ephemerally for *that turn only*, and vanishes afterward:
@@ -31,7 +31,7 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
   Monitors tool invocations. If an identical command is issued 3 times or 2 consecutive failures occur, it halts execution:
   - In **Antigravity**: prompts confirmation via decision `"ask"`.
   - In **Claude Code**: blocks the action immediately with exit code `2`.
-* 🤝 **Shared Knowledge:** Discoveries captured via `te facts add` in an AGY session are immediately available when switching to Claude Code (and vice-versa).
+* 🤝 **Shared Knowledge:** Discoveries captured via `centsible facts add` in an Antigravity session are immediately available when switching to Claude Code (and vice-versa).
 * ⚡ **Zero External Dependencies:** Written 100% in Python standard library. Instant startup (<15ms).
 
 ---
@@ -42,22 +42,24 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
 
 #### Global Installation (All Workspaces)
 ```bash
-git clone https://github.com/<your-username>/agy-token-economizer.git ~/.gemini/config/plugins/agy-token-economizer
+git clone https://github.com/<your-username>/centsible.git ~/.gemini/config/plugins/centsible
 ```
 
 #### Workspace-Only Installation
 ```bash
 mkdir -p .agents/plugins
-git clone https://github.com/<your-username>/agy-token-economizer.git .agents/plugins/agy-token-economizer
+git clone https://github.com/<your-username>/centsible.git .agents/plugins/centsible
 ```
+
+Antigravity automatically discovers and activates the plugin on startup.
 
 ---
 
 ### 2. For Claude Code
 
-1. Add `te` to your shell PATH:
+1. Add `centsible` to your shell PATH:
    ```bash
-   ln -sf /Users/ts.00023/Documents/repos/agy-token-economizer/bin/te ~/.local/bin/te
+   ln -sf /path/to/centsible/bin/centsible ~/.local/bin/centsible
    ```
 2. Enable Claude Code hooks by adding the following to your `~/.claude/settings.json` (or `.claude/settings.json` in your project):
    ```json
@@ -68,7 +70,7 @@ git clone https://github.com/<your-username>/agy-token-economizer.git .agents/pl
            "hooks": [
              {
                "type": "command",
-               "command": "te hook claude-prompt"
+               "command": "centsible hook claude-prompt"
              }
            ]
          }
@@ -79,7 +81,7 @@ git clone https://github.com/<your-username>/agy-token-economizer.git .agents/pl
            "hooks": [
              {
                "type": "command",
-               "command": "te hook claude-pre-tool"
+               "command": "centsible hook claude-pre-tool"
              }
            ]
          }
@@ -90,7 +92,7 @@ git clone https://github.com/<your-username>/agy-token-economizer.git .agents/pl
            "hooks": [
              {
                "type": "command",
-               "command": "te hook claude-post-tool"
+               "command": "centsible hook claude-post-tool"
              }
            ]
          }
@@ -102,17 +104,15 @@ git clone https://github.com/<your-username>/agy-token-economizer.git .agents/pl
 
 ---
 
-## 🛠️ CLI Usage (`te`)
-
-Add `./bin/te` to your `PATH` or invoke it directly:
+## 🛠️ CLI Usage (`centsible`)
 
 ### 1. View System Status
 ```bash
-./bin/te status
+centsible status
 ```
 Output:
 ```text
-=== AGY TokenEconomizer Status ===
+=== Centsible Status 🪙 ===
 • Facts Storage:  /Users/.../.agents/facts.jsonl
 • Total Facts:    3
 • Total Hits:     14
@@ -122,31 +122,31 @@ Output:
 
 ### 2. Add a Micro-Fact
 ```bash
-./bin/te facts add --pattern "<regex_or_keyword>" --fact "<one_line_fact>"
+centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_fact>"
 ```
 Examples:
 ```bash
 # Example 1: Bruno test command
-./bin/te facts add --pattern "bruno|run-bruno" --fact "Append --condense to Bruno commands on UAT to save 80% JSON tokens."
+centsible facts add --pattern "bruno|run-bruno" --fact "Append --condense to Bruno commands on UAT to save 80% JSON tokens."
 
 # Example 2: Test runner
-./bin/te facts add --pattern "pytest|unit-test" --fact "Run unit tests with 'pytest tests/ -q --tb=short' instead of full suite."
+centsible facts add --pattern "pytest|unit-test" --fact "Run unit tests with 'pytest tests/ -q --tb=short' instead of full suite."
 ```
 
 ### 3. List Stored Facts
 ```bash
-./bin/te facts list
+centsible facts list
 ```
 
 ### 4. Test Prompt Matching
 Check what facts trigger for a specific user prompt without executing:
 ```bash
-./bin/te facts test "Can you run bruno tests for me?"
+centsible facts test "Can you run bruno tests for me?"
 ```
 
 ### 5. Remove Stale Fact
 ```bash
-./bin/te facts remove <id_or_pattern>
+centsible facts remove <id_or_pattern>
 ```
 
 ---
@@ -157,11 +157,11 @@ Check what facts trigger for a specific user prompt without executing:
 User Prompt: "Run bruno test"
       │
       ▼
-[ Antigravity PreInvocation Hook ]
+[ PreInvocation / UserPromptSubmit Hook ]
       │
-      ├──> te hook pre-invocation (stdin: lastUserInput)
+      ├──> centsible hook (stdin: lastUserInput / prompt)
       │      └─ Matcher: matches "bruno" pattern
-      │      └─ stdout: {"injectSteps": [{"ephemeralMessage": "[MICRO-FACTS] ..."}]}
+      │      └─ Returns ephemeral injection for this turn
       ▼
 [ Model Execution Turn ]  <-- Sees micro-fact for this turn only!
       │
@@ -170,7 +170,7 @@ User Prompt: "Run bruno test"
       │      ▼
       │   [ PreToolUse Hook: Loop Guard Check ]
       │      └─ Checks identical call count & consecutive errors
-      │      └─ Decision: "allow" (or "ask" if runaway loop detected)
+      │      └─ Decision: "allow" (or alerts/blocks if runaway loop detected)
       ▼
 [ Next Turn: "Fix utils.py" ]
       │

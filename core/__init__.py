@@ -1,5 +1,5 @@
 """
-agy-token-economizer: Experience-driven cost and token optimization plugin for Google Antigravity (AGY).
+centsible: Experience-driven cost and token optimization plugin for AI coding agents.
 """
 
 __version__ = "0.1.0"

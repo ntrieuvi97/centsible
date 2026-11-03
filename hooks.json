@@ -1,9 +1,9 @@
 {
-  "agy-token-economizer": {
+  "centsible": {
     "PreInvocation": [
       {
         "type": "command",
-        "command": "./bin/te hook pre-invocation",
+        "command": "./bin/centsible hook pre-invocation",
         "timeout": 5
       }
     ],
@@ -13,7 +13,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./bin/te hook pre-tool",
+            "command": "./bin/centsible hook pre-tool",
             "timeout": 5
           }
         ]
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "./bin/te hook post-tool",
+            "command": "./bin/centsible hook post-tool",
             "timeout": 5
           }
         ]
