@@ -138,6 +138,9 @@ COMMON_BINS = {
     "bruno", "cargo", "go", "docker", "make", "just", "gradle", "mvn", "dotnet", "prisma", "terraform", "kubectl",
 }
 _RUNNER_BINS = {"uv", "poetry", "npx", "bun", "pnpm", "yarn", "npm"}
+# Interpreters are too generic to learn on; the script they run ('node scripts/x.js') is the real tool.
+_INTERPRETERS = {"node", "python", "python3", "bash", "sh", "deno", "ruby"}
+_SCRIPT_RE = re.compile(r"\.(?:js|mjs|cjs|ts|py|sh|rb)$")
 _SHELL_OPS = {"&&", "||", ";", "|"}
 
 
@@ -166,6 +169,12 @@ def find_common_bin(cmd: str) -> Optional[str]:
             if matched[0] in _RUNNER_BINS and len(matched) > 1:
                 return matched[1]
             return matched[0]
+    for segment in _split_shell_segments(cmd):
+        for idx, part in enumerate(segment[:6]):
+            if Path(part).name in _INTERPRETERS:
+                script = next((t for t in segment[idx + 1 : idx + 6] if _SCRIPT_RE.search(t)), None)
+                if script:
+                    return Path(script).name
     return None
 
 

@@ -132,6 +132,19 @@ class TestFactsEngine(unittest.TestCase):
         valid_call = {"name": "Bash", "args": {"command": "pytest tests/ -q"}}
         self.assertEqual(self.engine.match_tool_call(valid_call), [])
 
+    def test_auto_learn_from_recovery_on_interpreter_scripts(self):
+        cases = [
+            ("node scripts/run-suite.js folder", "node scripts/run-suite.js folder --env staging", "run-suite.js"),
+            ("python3 scripts/deploy_staging.py abc", "python3 scripts/deploy_staging.py abc --env prod", "deploy_staging.py"),
+        ]
+        for failed, ok, expected in cases:
+            learned = self.engine.auto_learn_from_recovery(failed, ok)
+            self.assertIsNotNone(learned, failed)
+            self.assertEqual(learned["pattern"], expected)
+        # Only the script's target argument changed -> not a recovery; plain interpreter w/o script ignored
+        self.assertIsNone(self.engine.auto_learn_from_recovery("node scripts/a.js d/x.json", "node scripts/a.js d/y.json"))
+        self.assertIsNone(self.engine.auto_learn_from_recovery("node -e 1", "node -e 2"))
+
     def test_auto_learn_from_correction_and_file_gotcha_matching(self):
         # 1. Questions must never be treated as corrections
         self.assertIsNone(self.engine.auto_learn_from_correction("tại sao lượt auto learn chỉ có 1 vậy"))
