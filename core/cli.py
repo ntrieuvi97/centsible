@@ -98,6 +98,98 @@ def handle_hook_post_tool() -> None:
     sys.stdout.flush()
 
 
+def handle_hook_claude_prompt() -> None:
+    """
+    Claude Code Hook: UserPromptSubmit.
+    Reads prompt and cwd from stdin, outputs additionalContext.
+    """
+    try:
+        raw_input = sys.stdin.read()
+        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
+    except Exception:
+        payload = {}
+
+    user_prompt = payload.get("prompt", "")
+    cwd = payload.get("cwd") or str(Path.cwd())
+
+    facts_path = get_default_facts_path([cwd])
+    engine = FactsEngine(facts_path)
+
+    matched = engine.match(user_prompt, record_hits=True)
+    context_msg = engine.format_ephemeral_message(matched)
+
+    output: Dict[str, Any] = {}
+    if context_msg:
+        output = {
+            "hookSpecificOutput": {
+                "additionalContext": context_msg
+            }
+        }
+
+    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def handle_hook_claude_pre_tool() -> None:
+    """
+    Claude Code Hook: PreToolUse.
+    Checks LoopGuard; exits 2 if runaway loop detected, exits 0 if allowed.
+    """
+    try:
+        raw_input = sys.stdin.read()
+        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
+    except Exception:
+        payload = {}
+
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {})
+    session_id = payload.get("session_id", "default")
+
+    tool_call = {
+        "name": tool_name,
+        "args": tool_input,
+    }
+
+    guard = LoopGuard(session_id)
+    decision, reason = guard.check_pre_tool_use(tool_call)
+
+    if decision != "allow" and reason:
+        # In Claude Code, exit code 2 aborts the tool call and prints stderr
+        sys.stderr.write(f"\n{reason}\n")
+        sys.stderr.flush()
+        sys.exit(2)
+
+    sys.exit(0)
+
+
+def handle_hook_claude_post_tool() -> None:
+    """
+    Claude Code Hook: PostToolUse.
+    Records tool outcome to track failure streaks.
+    """
+    try:
+        raw_input = sys.stdin.read()
+        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
+    except Exception:
+        payload = {}
+
+    tool_name = payload.get("tool_name", "")
+    tool_input = payload.get("tool_input", {})
+    session_id = payload.get("session_id", "default")
+    error = payload.get("error")
+
+    tool_call = {
+        "name": tool_name,
+        "args": tool_input,
+    }
+
+    guard = LoopGuard(session_id)
+    guard.record_post_tool_use(tool_call, error)
+
+    sys.stdout.write(json.dumps({}, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="te",
@@ -108,9 +200,14 @@ def main() -> int:
     # Hook group
     hook_parser = subparsers.add_parser("hook", help="Internal hook router for Antigravity")
     hook_sub = hook_parser.add_subparsers(dest="hook_type")
-    hook_sub.add_parser("pre-invocation", help="PreInvocation hook")
-    hook_sub.add_parser("pre-tool", help="PreToolUse hook")
-    hook_sub.add_parser("post-tool", help="PostToolUse hook")
+    hook_sub.add_parser("pre-invocation", help="Antigravity PreInvocation hook")
+    hook_sub.add_parser("pre-tool", help="Antigravity PreToolUse hook")
+    hook_sub.add_parser("post-tool", help="Antigravity PostToolUse hook")
+
+    # Claude Code hooks
+    hook_sub.add_parser("claude-prompt", help="Claude Code UserPromptSubmit hook")
+    hook_sub.add_parser("claude-pre-tool", help="Claude Code PreToolUse hook")
+    hook_sub.add_parser("claude-post-tool", help="Claude Code PostToolUse hook")
 
     # Facts group
     facts_parser = subparsers.add_parser("facts", help="Manage repository micro-facts")
@@ -150,6 +247,15 @@ def main() -> int:
             return 0
         elif args.hook_type == "post-tool":
             handle_hook_post_tool()
+            return 0
+        elif args.hook_type == "claude-prompt":
+            handle_hook_claude_prompt()
+            return 0
+        elif args.hook_type == "claude-pre-tool":
+            handle_hook_claude_pre_tool()
+            return 0
+        elif args.hook_type == "claude-post-tool":
+            handle_hook_claude_post_tool()
             return 0
         else:
             hook_parser.print_help()
