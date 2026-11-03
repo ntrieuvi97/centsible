@@ -42,13 +42,13 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
 
 #### Global Installation (All Workspaces)
 ```bash
-git clone https://github.com/ntrieuvi97/centsible.git ~/.gemini/config/plugins/agy-token-economizer
+git clone https://github.com/<your-username>/agy-token-economizer.git ~/.gemini/config/plugins/agy-token-economizer
 ```
 
 #### Workspace-Only Installation
 ```bash
 mkdir -p .agents/plugins
-git clone https://github.com/ntrieuvi97/centsible.git .agents/plugins/agy-token-economizer
+git clone https://github.com/<your-username>/agy-token-economizer.git .agents/plugins/agy-token-economizer
 ```
 
 ---

@@ -15,7 +15,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 def get_state_path(conversation_id: Optional[str]) -> Path:
     safe_id = "".join(c for c in (conversation_id or "default") if c.isalnum() or c in "-_")
-    return Path(tempfile.gettempdir()) / f"te_loop_guard_{safe_id}.json"
+    # Secure user-isolated temp directory (prevents symlink/collision attacks on multi-user systems)
+    uid = os.getuid() if hasattr(os, "getuid") else "user"
+    te_dir = Path(tempfile.gettempdir()) / f"te_{uid}"
+    try:
+        te_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except Exception:
+        te_dir = Path(tempfile.gettempdir())
+    return te_dir / f"loop_guard_{safe_id}.json"
 
 
 class LoopGuard:

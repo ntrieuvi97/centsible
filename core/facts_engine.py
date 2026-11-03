@@ -19,17 +19,22 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
     # 1. Workspace .agents directory if workspace is provided
     if workspace_paths:
         for ws in workspace_paths:
-            candidate = Path(ws) / ".agents" / "facts.jsonl"
-            if candidate.parent.exists():
-                return candidate
-            # Or root of workspace
-            candidate_root = Path(ws) / "facts.jsonl"
-            if candidate_root.exists():
-                return candidate_root
+            try:
+                ws_path = Path(ws).resolve()
+                if not ws_path.is_dir():
+                    continue
+                candidate = ws_path / ".agents" / "facts.jsonl"
+                if candidate.parent.exists() and candidate.parent.is_dir():
+                    return candidate
+                candidate_root = ws_path / "facts.jsonl"
+                if candidate_root.exists():
+                    return candidate_root
+            except Exception:
+                continue
 
     # 2. Current working directory .agents
-    cwd_agents = Path.cwd() / ".agents" / "facts.jsonl"
-    if cwd_agents.parent.exists():
+    cwd_agents = Path.cwd().resolve() / ".agents" / "facts.jsonl"
+    if cwd_agents.parent.exists() and cwd_agents.parent.is_dir():
         return cwd_agents
 
     # 3. Global fallback in ~/.gemini/antigravity/facts.jsonl
@@ -77,9 +82,14 @@ class FactsEngine:
         """Add or update a micro-fact."""
         self._ensure_storage()
 
+        if len(pattern) > 500:
+            raise ValueError("Regex pattern is too long (maximum 500 characters).")
+
         # Validate regex pattern
         try:
-            re.compile(pattern, re.IGNORECASE)
+            compiled = re.compile(pattern, re.IGNORECASE)
+            # Safe probe test
+            compiled.search("")
         except re.error as e:
             raise ValueError(f"Invalid regex pattern '{pattern}': {e}")
 
