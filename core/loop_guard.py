@@ -197,6 +197,9 @@ class LoopGuard:
         # Trigger 2: Too many consecutive errors on same target
         if state.get("consecutive_errors_count", 0) >= self.max_consecutive_errors:
             state["interventions"] = state.get("interventions", 0) + 1
+            # A blocked call never reaches PostToolUse, so nothing else could reset this: block once, then release.
+            errors = state["consecutive_errors_count"]
+            state["consecutive_errors_count"] = 0
             self._save_state(state)
             if engine:
                 engine.update_metrics(
@@ -204,7 +207,7 @@ class LoopGuard:
                     saved_loop_tokens=DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
                 )
             reason = (
-                f"[LoopGuard Alert] {state['consecutive_errors_count']} consecutive failures detected. "
+                f"[LoopGuard Alert] {errors} consecutive failures detected. "
                 "Circuit breaker activated. Review error cause before retrying."
             )
             return "ask", reason
