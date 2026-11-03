@@ -189,6 +189,13 @@ python3 -m unittest discover tests
 
 ---
 
+## 🙏 Acknowledgments
+
+* Inspired by the cost control philosophy and research behind [Microsoft Research's TokenEconomizer](https://github.com/microsoft/TokenEconomizer).
+* Built natively for the Google Antigravity and Claude Code developer communities.
+
+---
+
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
