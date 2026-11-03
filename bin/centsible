@@ -1,5 +1,13 @@
-#!/usr/bin/env bash
-# Entrypoint launcher for centsible
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PYTHONPATH="$SCRIPT_DIR:$PYTHONPATH"
-exec python3 "$SCRIPT_DIR/core/cli.py" "$@"
+#!/usr/bin/env python3
+"""Entrypoint launcher for centsible (resolves symlinks portably across macOS/Linux)."""
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core.cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())

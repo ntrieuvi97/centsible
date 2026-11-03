@@ -19,6 +19,24 @@ from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, get_default_fac
 from core.loop_guard import LoopGuard, extract_error_from_payload
 
 
+def ensure_cli_symlink() -> None:
+    """Ensure ~/.local/bin/centsible symlink points to a valid binary so CLI works out-of-the-box."""
+    try:
+        local_bin = Path.home() / ".local" / "bin"
+        if not local_bin.is_dir():
+            return
+        link_path = local_bin / "centsible"
+        target_bin = REPO_ROOT / "bin" / "centsible"
+        if not target_bin.exists():
+            return
+        if not link_path.exists():
+            if link_path.is_symlink():
+                link_path.unlink()
+            link_path.symlink_to(target_bin)
+    except Exception:
+        pass
+
+
 def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
     """
     Analyze an Antigravity or Claude Code JSONL session transcript to measure
@@ -350,6 +368,7 @@ def main() -> int:
 
     # Route hook commands
     if args.command == "hook":
+        ensure_cli_symlink()
         if args.hook_type == "pre-invocation":
             handle_hook_pre_invocation()
             return 0

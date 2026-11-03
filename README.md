@@ -48,6 +48,7 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
 #### Global Installation (All Workspaces)
 ```bash
 git clone https://github.com/ntrieuvi97/centsible.git ~/.gemini/config/plugins/centsible
+ln -sf ~/.gemini/config/plugins/centsible/bin/centsible ~/.local/bin/centsible
 ```
 
 #### Workspace-Only Installation
@@ -56,7 +57,7 @@ mkdir -p .agents/plugins
 git clone https://github.com/ntrieuvi97/centsible.git .agents/plugins/centsible
 ```
 
-Antigravity automatically discovers and activates the plugin on startup.
+Antigravity automatically discovers and activates the plugin on startup (and automatically links `~/.local/bin/centsible` on first run if `~/.local/bin` exists).
 
 ---
 
