@@ -16,9 +16,11 @@ This skill allows the agent and user to manage experience-driven micro-facts and
 
 ## Commands
 
-### 1. Check Status
+### 1. Check Status & Token ROI Stats
 ```bash
 ./bin/centsible status
+./bin/centsible stats
+./bin/centsible stats --transcript <path_to_transcript.jsonl> --json
 ```
 
 ### 2. List Micro-Facts

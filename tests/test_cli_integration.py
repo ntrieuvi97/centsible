@@ -112,6 +112,43 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("=== Centsible Status", res.stdout)
         self.assertIn("Loop Guard:     Enabled", res.stdout)
+        self.assertIn("Tokens Saved:", res.stdout)
+
+    def test_stats_and_transcript_analysis(self):
+        # 1. Seed a fact and trigger a hit
+        self._run_te([
+            "facts", "add",
+            "--pattern", "pytest",
+            "--fact", "Use pytest -q",
+            "--id", "fact-pytest",
+        ])
+        self._run_te(
+            ["hook", "pre-invocation"],
+            stdin_data=json.dumps({
+                "lastUserInput": "Run pytest suite",
+                "workspacePaths": [self.temp_dir.name],
+                "conversationId": "conv_stats_test",
+            }),
+        )
+
+        # 2. Create a mock transcript.jsonl
+        transcript_path = Path(self.temp_dir.name) / "transcript.jsonl"
+        steps = [
+            {"type": "USER_INPUT", "content": "Run tests"},
+            {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "read_file", "args": {"Path": "README.md"}}]},
+            {"type": "PLANNER_RESPONSE", "tool_calls": [{"name": "run_command", "args": {"CommandLine": "pytest -q"}}], "status": "DONE"},
+        ]
+        transcript_path.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
+
+        # 3. Run stats --json --transcript
+        res = self._run_te(["stats", "--json", "--transcript", str(transcript_path)])
+        self.assertEqual(res.returncode, 0)
+        report = json.loads(res.stdout)
+        self.assertEqual(report["metrics"]["fact_hits"], 1)
+        self.assertGreater(report["metrics"]["net_saved_tokens"], 1400)
+        self.assertEqual(report["transcript"]["user_turns"], 1)
+        self.assertEqual(report["transcript"]["discovery_steps_to_first_cmd"], 1)
+        self.assertEqual(report["transcript"]["first_try_cmd_rate"], 100.0)
 
 
 if __name__ == "__main__":

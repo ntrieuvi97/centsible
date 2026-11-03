@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "centsible",
+  "description": "Experience-driven cost and token optimization for AI coding agents (Antigravity & Claude Code)",
+  "owner": {
+    "name": "Vi Nguyen",
+    "url": "https://github.com/ntrieuvi97"
+  },
+  "plugins": [
+    {
+      "name": "centsible",
+      "description": "Zero-bloat micro-skills, runaway loop guard, and real-time token/cost ROI telemetry.",
+      "version": "0.2.0",
+      "source": "./",
+      "category": "productivity",
+      "skills": [
+        "./skills/centsible"
+      ]
+    }
+  ]
+}

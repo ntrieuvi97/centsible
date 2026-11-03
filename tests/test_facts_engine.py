@@ -69,6 +69,59 @@ class TestFactsEngine(unittest.TestCase):
         # Non-existing returns False
         self.assertFalse(self.engine.remove_fact("non-existing"))
 
+    def test_match_tool_call_missing_vs_present_flags(self):
+        self.engine.add_fact(
+            "bruno",
+            "Append --compact to Bruno commands on staging",
+            fact_id="bruno-condense",
+        )
+        # Missing --compact -> triggers tool hint
+        missing_call = {"name": "run_command", "args": {"CommandLine": "bruno run staging"}}
+        matched = self.engine.match_tool_call(missing_call)
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["id"], "bruno-condense")
+
+        # Already has --compact -> no redundant hint
+        valid_call = {"name": "run_command", "args": {"CommandLine": "bruno run staging --compact"}}
+        matched_valid = self.engine.match_tool_call(valid_call)
+        self.assertEqual(len(matched_valid), 0)
+
+        # Already injected in prompt (exclude_ids) -> skipped
+        matched_excluded = self.engine.match_tool_call(missing_call, exclude_ids=["bruno-condense"])
+        self.assertEqual(len(matched_excluded), 0)
+
+    def test_auto_learn_from_recovery_and_metrics_roi(self):
+        learned = self.engine.auto_learn_from_recovery("pytest tests/", "python3 -m pytest tests/ -q")
+        self.assertIsNotNone(learned)
+        self.assertEqual(learned["category"], "auto-learned")
+        self.assertIn("python3 -m pytest tests/ -q", learned["fact"])
+
+        # Trigger a hit and verify ROI summary
+        self.engine.match("Please run pytest now")
+        summary = self.engine.get_metrics_summary(usd_per_mtok=3.0)
+        self.assertEqual(summary["total_facts"], 1)
+        self.assertEqual(summary["auto_learned_facts"], 1)
+        self.assertEqual(summary["fact_hits"], 1)
+        self.assertGreater(summary["net_saved_tokens"], 1400)
+        self.assertGreater(summary["saved_cents"], 0.4)
+        self.assertGreater(summary["roi_multiplier"], 10.0)
+
+    def test_vietnamese_nfc_nfd_and_accent_insensitive_matching(self):
+        import unicodedata
+
+        self.engine.add_fact(
+            "kiểm thử|chạy đơ",
+            "Dùng 'pytest -q' trên môi trường 'thử nghiệm'",
+            fact_id="vn-test",
+        )
+        # 1. Exact NFC Vietnamese match
+        self.assertEqual(len(self.engine.match("Hãy chạy kiểm thử giúp tôi")), 1)
+        # 2. macOS NFD decomposed Unicode match
+        nfd_prompt = unicodedata.normalize("NFD", "Hãy chạy kiểm thử giúp tôi")
+        self.assertEqual(len(self.engine.match(nfd_prompt)), 1)
+        # 3. Non-diacritic (không dấu, gồm cả đ -> d) fallback match
+        self.assertEqual(len(self.engine.match("Hay chay kiem thu va chay do giup toi")), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

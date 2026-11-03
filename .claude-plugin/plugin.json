@@ -1,7 +1,15 @@
 {
   "name": "centsible",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Experience-driven cost and token optimization for Claude Code and Antigravity",
-  "author": "Antigravity Open Source Community",
-  "homepage": "https://github.com/<your-username>/centsible"
+  "author": {
+    "name": "Vi Nguyen",
+    "url": "https://github.com/ntrieuvi97"
+  },
+  "homepage": "https://github.com/ntrieuvi97/centsible",
+  "repository": "https://github.com/ntrieuvi97/centsible",
+  "license": "MIT",
+  "hooks": [
+    "./claude-hooks.json"
+  ]
 }
