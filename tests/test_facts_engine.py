@@ -107,6 +107,20 @@ class TestFactsEngine(unittest.TestCase):
         self.assertGreater(summary["saved_cents"], 0.4)
         self.assertGreater(summary["roi_multiplier"], 10.0)
 
+    def test_auto_learn_handles_wrappers_and_compound_commands(self):
+        cases = [
+            ("cd /x && pytest tests/", "cd /x && python3 -m pytest tests/ -q", "pytest"),
+            ("rtk pytest tests", "rtk proxy pytest tests -q", "pytest"),
+            ("npm test", "npm run test:ci", "npm"),
+        ]
+        for failed, ok, expected in cases:
+            learned = self.engine.auto_learn_from_recovery(failed, ok)
+            self.assertIsNotNone(learned, failed)
+            self.assertEqual(learned["pattern"], expected)
+        # Different tools or no known tool -> nothing learned
+        self.assertIsNone(self.engine.auto_learn_from_recovery("pytest x", "npm test"))
+        self.assertIsNone(self.engine.auto_learn_from_recovery("./foo a", "./foo b"))
+
     def test_vietnamese_nfc_nfd_and_accent_insensitive_matching(self):
         import unicodedata
 
