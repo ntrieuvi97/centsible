@@ -5,6 +5,7 @@ CLI entrypoint and Hook Router for centsible.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -16,7 +17,15 @@ if str(REPO_ROOT) not in sys.path:
 
 from core import __version__
 from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, get_default_facts_path
-from core.loop_guard import LoopGuard, extract_error_from_payload
+from core.loop_guard import (
+    CONFIG_KEYS,
+    LoopGuard,
+    extract_error_from_payload,
+    get_config_path,
+    load_config,
+    resolve_threshold,
+    save_config,
+)
 
 
 def ensure_cli_symlink() -> None:
@@ -400,6 +409,17 @@ def main() -> int:
     stats_parser.add_argument("--transcript", help="Optional path to a session transcript (.jsonl) to analyze")
     stats_parser.add_argument("--json", action="store_true", help="Output metrics as JSON")
 
+    config_parser = subparsers.add_parser("config", help="View or change loop guard thresholds")
+    config_sub = config_parser.add_subparsers(dest="config_action")
+    config_sub.add_parser("list", help="Show effective thresholds")
+    config_get = config_sub.add_parser("get", help="Show one effective threshold")
+    config_get.add_argument("key", choices=sorted(CONFIG_KEYS))
+    config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")
+    config_set.add_argument("key", choices=sorted(CONFIG_KEYS))
+    config_set.add_argument("value", type=int)
+    config_unset = config_sub.add_parser("unset", help="Remove a threshold (back to default)")
+    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS))
+
     args = parser.parse_args()
 
     # Route hook commands
@@ -429,6 +449,25 @@ def main() -> int:
         else:
             hook_parser.print_help()
             return 1
+
+    if args.command == "config":
+        cfg = load_config()
+        if args.config_action == "set":
+            if args.value < 1:
+                print("✗ value must be >= 1")
+                return 1
+            cfg[args.key] = args.value
+            save_config(cfg)
+        elif args.config_action == "unset":
+            cfg.pop(args.key, None)
+            save_config(cfg)
+        keys = [args.key] if args.config_action in ("get", "set", "unset") else sorted(CONFIG_KEYS)
+        for key in keys:
+            env_name = CONFIG_KEYS[key][0]
+            note = f" (overridden by env {env_name})" if os.environ.get(env_name) else ""
+            print(f"{key} = {resolve_threshold(key)}{note}")
+        print(f"Config file: {get_config_path()}")
+        return 0
 
     # Route facts commands
     engine = FactsEngine()

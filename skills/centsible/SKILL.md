@@ -23,6 +23,15 @@ This skill allows the agent and user to manage experience-driven micro-facts and
 ./bin/centsible stats --transcript <path_to_transcript.jsonl> --json
 ```
 
+### Loop Guard Thresholds
+View or change how many repeated calls / consecutive failures trigger the loop guard (defaults: 3 identical calls, 2 errors):
+```bash
+./bin/centsible config list
+./bin/centsible config set max_consecutive_errors 4
+./bin/centsible config unset max_consecutive_errors
+```
+Keys: `max_consecutive_errors`, `max_identical_calls`. Env vars `CENTSIBLE_MAX_*` override the file.
+
 ### 2. List Micro-Facts
 ```bash
 ./bin/centsible facts list
