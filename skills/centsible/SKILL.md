@@ -24,13 +24,14 @@ This skill allows the agent and user to manage experience-driven micro-facts and
 ```
 
 ### Loop Guard Thresholds
-View or change how many repeated calls / consecutive failures trigger the loop guard (defaults: 3 identical calls, 2 errors):
+Pick a mode preset, or fine-tune the numbers. Modes (errors / identical calls): `ultra` 2/3, `normal` 3/4 (default), `weak` 4/5.
 ```bash
+./bin/centsible config mode ultra
 ./bin/centsible config list
 ./bin/centsible config set max_consecutive_errors 4
 ./bin/centsible config unset max_consecutive_errors
 ```
-Keys: `max_consecutive_errors`, `max_identical_calls`. Env vars `CENTSIBLE_MAX_*` override the file.
+Keys: `max_consecutive_errors`, `max_identical_calls`. Numeric keys override the mode. Env vars `CENTSIBLE_LOOP_MODE` / `CENTSIBLE_MAX_*` override the file.
 
 ### 2. List Micro-Facts
 ```bash

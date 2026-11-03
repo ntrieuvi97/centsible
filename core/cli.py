@@ -19,10 +19,13 @@ from core import __version__
 from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, get_default_facts_path
 from core.loop_guard import (
     CONFIG_KEYS,
+    MODE_ENV,
+    MODES,
     LoopGuard,
     extract_error_from_payload,
     get_config_path,
     load_config,
+    resolve_mode,
     resolve_threshold,
     save_config,
 )
@@ -411,14 +414,16 @@ def main() -> int:
 
     config_parser = subparsers.add_parser("config", help="View or change loop guard thresholds")
     config_sub = config_parser.add_subparsers(dest="config_action")
-    config_sub.add_parser("list", help="Show effective thresholds")
+    config_sub.add_parser("list", help="Show effective mode and thresholds")
+    config_mode = config_sub.add_parser("mode", help="Show or set the loop guard mode preset")
+    config_mode.add_argument("name", nargs="?", choices=sorted(MODES), help="ultra (strict), normal, weak (tolerant)")
     config_get = config_sub.add_parser("get", help="Show one effective threshold")
     config_get.add_argument("key", choices=sorted(CONFIG_KEYS))
     config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")
     config_set.add_argument("key", choices=sorted(CONFIG_KEYS))
     config_set.add_argument("value", type=int)
     config_unset = config_sub.add_parser("unset", help="Remove a threshold (back to default)")
-    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS))
+    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode"])
 
     args = parser.parse_args()
 
@@ -452,7 +457,10 @@ def main() -> int:
 
     if args.command == "config":
         cfg = load_config()
-        if args.config_action == "set":
+        if args.config_action == "mode" and args.name:
+            cfg["mode"] = args.name
+            save_config(cfg)
+        elif args.config_action == "set":
             if args.value < 1:
                 print("✗ value must be >= 1")
                 return 1
@@ -461,9 +469,10 @@ def main() -> int:
         elif args.config_action == "unset":
             cfg.pop(args.key, None)
             save_config(cfg)
-        keys = [args.key] if args.config_action in ("get", "set", "unset") else sorted(CONFIG_KEYS)
-        for key in keys:
-            env_name = CONFIG_KEYS[key][0]
+        note = f" (overridden by env {MODE_ENV})" if os.environ.get(MODE_ENV) in MODES else ""
+        print(f"mode = {resolve_mode()}{note}")
+        for key in sorted(CONFIG_KEYS):
+            env_name = CONFIG_KEYS[key]
             note = f" (overridden by env {env_name})" if os.environ.get(env_name) else ""
             print(f"{key} = {resolve_threshold(key)}{note}")
         print(f"Config file: {get_config_path()}")

@@ -35,7 +35,7 @@ class TestLoopGuard(unittest.TestCase):
             with mock.patch.dict("os.environ", env):
                 g = LoopGuard(conversation_id=self.conv_id)
             self.assertEqual(g.max_consecutive_errors, 5)
-            self.assertEqual(g.max_identical_calls, 3)
+            self.assertEqual(g.max_identical_calls, 4)
 
     def test_thresholds_from_config_file(self):
         from unittest import mock
@@ -46,7 +46,29 @@ class TestLoopGuard(unittest.TestCase):
                 save_config({"max_consecutive_errors": 4, "max_identical_calls": 0})
                 g = LoopGuard(conversation_id=self.conv_id)
             self.assertEqual(g.max_consecutive_errors, 4)
-            self.assertEqual(g.max_identical_calls, 3)
+            self.assertEqual(g.max_identical_calls, 4)
+
+    def test_mode_presets_and_overrides(self):
+        from unittest import mock
+        from core.loop_guard import save_config
+        with tempfile.TemporaryDirectory() as home:
+            clean = {k: v for k, v in os.environ.items() if not k.startswith("CENTSIBLE_")}
+            clean["CENTSIBLE_HOME"] = home
+            with mock.patch.dict("os.environ", clean, clear=True):
+                g = LoopGuard(conversation_id=self.conv_id)
+                self.assertEqual((g.max_consecutive_errors, g.max_identical_calls), (3, 4))
+                save_config({"mode": "ultra"})
+                g = LoopGuard(conversation_id=self.conv_id)
+                self.assertEqual((g.max_consecutive_errors, g.max_identical_calls), (2, 3))
+                save_config({"mode": "weak", "max_identical_calls": 7})
+                g = LoopGuard(conversation_id=self.conv_id)
+                self.assertEqual((g.max_consecutive_errors, g.max_identical_calls), (4, 7))
+                os.environ["CENTSIBLE_LOOP_MODE"] = "ultra"
+                g = LoopGuard(conversation_id=self.conv_id)
+                self.assertEqual(g.max_consecutive_errors, 2)
+                os.environ["CENTSIBLE_LOOP_MODE"] = "bogus"
+                g = LoopGuard(conversation_id=self.conv_id)
+                self.assertEqual(g.max_consecutive_errors, 4)
 
     def test_allow_first_and_second_identical_call(self):
         tool_call = {

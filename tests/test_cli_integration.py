@@ -47,7 +47,16 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("max_consecutive_errors = 4", self._run_te(["config", "list"], env=env).stdout)
         self.assertNotEqual(self._run_te(["config", "set", "max_identical_calls", "0"], env=env).returncode, 0)
         res = self._run_te(["config", "unset", "max_consecutive_errors"], env=env)
-        self.assertIn("max_consecutive_errors = 2", res.stdout)
+        self.assertIn("max_consecutive_errors = 3", res.stdout)
+
+    def test_config_mode_cli(self):
+        env = {"CENTSIBLE_HOME": self.temp_dir.name, "CENTSIBLE_LOOP_MODE": "", "CENTSIBLE_MAX_CONSECUTIVE_ERRORS": ""}
+        res = self._run_te(["config", "mode", "weak"], env=env)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("mode = weak", res.stdout)
+        self.assertIn("max_consecutive_errors = 4", res.stdout)
+        self.assertNotEqual(self._run_te(["config", "mode", "bogus"], env=env).returncode, 0)
+        self.assertIn("mode = normal", self._run_te(["config", "unset", "mode"], env=env).stdout)
 
     def test_facts_crud_cli(self):
         # 1. Add fact
