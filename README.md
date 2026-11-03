@@ -1,11 +1,12 @@
 # agy-token-economizer ⚡
 
-> **Experience-driven cost and token optimization plugin for Google Antigravity (AGY)**  
-> *Inspired by Microsoft Research's TokenEconomizer philosophy, tailored natively for the Antigravity agent runtime.*
+> **Experience-driven cost and token optimization plugin for Google Antigravity (AGY) & Claude Code**  
+> *Inspired by Microsoft Research's TokenEconomizer philosophy, unified natively across both agent runtimes.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero External Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
+[![Dual Runtime: AGY + Claude Code](https://img.shields.io/badge/Runtimes-AGY%20%7C%20Claude%20Code-purple.svg)](#)
 
 ---
 
@@ -13,40 +14,91 @@
 
 AI coding agents often burn thousands of unnecessary tokens due to 3 common patterns:
 1. **Repetitive Discovery:** In every new conversation, the agent rediscovers basic repository facts (how tests are run, special command flags, path quirks) by grepping and guessing.
-2. **Context Bloat:** Developers dump all hints into `AGENTS.md` or system prompts, which are paid for in **every single turn**, causing attention dilution (*lost in the middle*).
+2. **Context Bloat:** Developers dump all hints into `AGENTS.md` / `CLAUDE.md`, which are paid for in **every single turn**, causing attention dilution (*lost in the middle*).
 3. **Runaway Failure Loops:** Agents retry failing commands or repeated file edits 3–5 times before giving up, wasting context budget.
 
 ---
 
-## 💡 How `agy-token-economizer` Solves It
+## 💡 How It Solves It
 
-`agy-token-economizer` operates as a lightweight, zero-dependency controller natively integrated into Antigravity:
+`agy-token-economizer` operates as a lightweight, zero-dependency controller sharing a single source of truth (`.agents/facts.jsonl`) across both **Google Antigravity** and **Claude Code**:
 
-* 🧩 **Zero-Bloat Micro-Skills (`PreInvocation` Hook):**
-  Learns concise, 1-line repository facts with regex triggers. When a user prompt matches a trigger, the fact is injected as an **`ephemeralMessage`** for *that turn only*, and vanishes afterward. It **never** bloats `AGENTS.md` or future turns.
-* 🛡️ **Loop Guard & Circuit Breaker (`PreToolUse` Hook):**
-  Monitors tool invocations. If an identical command is issued 3 times or 2 consecutive failures occur, it halts execution and prompts the user/agent to redirect strategy immediately.
-* ⚡ **Zero External Dependencies:**
-  Written 100% in Python standard library. Instant startup (<15ms) on macOS, Linux, and Windows.
+* 🧩 **Zero-Bloat Micro-Skills:**
+  Learns concise, 1-line repository facts with regex triggers. When a user prompt matches a trigger, the fact is injected ephemerally for *that turn only*, and vanishes afterward:
+  - In **Antigravity**: via `PreInvocation` (`ephemeralMessage`).
+  - In **Claude Code**: via `UserPromptSubmit` (`hookSpecificOutput.additionalContext`).
+* 🛡️ **Loop Guard & Circuit Breaker:**
+  Monitors tool invocations. If an identical command is issued 3 times or 2 consecutive failures occur, it halts execution:
+  - In **Antigravity**: prompts confirmation via decision `"ask"`.
+  - In **Claude Code**: blocks the action immediately with exit code `2`.
+* 🤝 **Shared Knowledge:** Discoveries captured via `te facts add` in an AGY session are immediately available when switching to Claude Code (and vice-versa).
+* ⚡ **Zero External Dependencies:** Written 100% in Python standard library. Instant startup (<15ms).
 
 ---
 
 ## 📦 Installation
 
-### Option 1: Global Plugin (All Workspaces)
-Clone into your global Antigravity plugins directory:
+### 1. For Google Antigravity (AGY)
+
+#### Global Installation (All Workspaces)
 ```bash
 git clone https://github.com/ntrieuvi97/centsible.git ~/.gemini/config/plugins/agy-token-economizer
 ```
 
-### Option 2: Workspace-Only Plugin
-Clone into a specific repository's `.agents/plugins` directory:
+#### Workspace-Only Installation
 ```bash
 mkdir -p .agents/plugins
 git clone https://github.com/ntrieuvi97/centsible.git .agents/plugins/agy-token-economizer
 ```
 
-Antigravity automatically discovers and activates the plugin on startup.
+---
+
+### 2. For Claude Code
+
+1. Add `te` to your shell PATH:
+   ```bash
+   ln -sf /Users/ts.00023/Documents/repos/agy-token-economizer/bin/te ~/.local/bin/te
+   ```
+2. Enable Claude Code hooks by adding the following to your `~/.claude/settings.json` (or `.claude/settings.json` in your project):
+   ```json
+   {
+     "hooks": {
+       "UserPromptSubmit": [
+         {
+           "hooks": [
+             {
+               "type": "command",
+               "command": "te hook claude-prompt"
+             }
+           ]
+         }
+       ],
+       "PreToolUse": [
+         {
+           "matcher": "*",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "te hook claude-pre-tool"
+             }
+           ]
+         }
+       ],
+       "PostToolUse": [
+         {
+           "matcher": "*",
+           "hooks": [
+             {
+               "type": "command",
+               "command": "te hook claude-post-tool"
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+   *(A ready-to-use template is available in `claude-hooks.json`).*
 
 ---
 
