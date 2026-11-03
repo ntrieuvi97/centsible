@@ -31,6 +31,17 @@
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible\" hook claude-post-tool-failure"
+          }
+        ]
+      }
     ]
   }
 }

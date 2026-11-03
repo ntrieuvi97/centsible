@@ -7,6 +7,7 @@ Manages repository-specific micro-facts and conditional ephemeral injections.
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import unicodedata
@@ -124,6 +125,29 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
                 pass
 
     return neutral_facts
+
+
+COMMON_BINS = {"pytest", "bruno", "npm", "pnpm", "yarn", "cargo", "go", "docker", "uv", "poetry", "ruff", "mypy"}
+_SHELL_OPS = {"&&", "||", ";", "|"}
+
+
+def find_common_bin(cmd: str) -> Optional[str]:
+    """Return the first known CLI tool near the start of any shell segment, skipping flags and wrappers."""
+    try:
+        tokens = shlex.split(cmd, posix=True)
+    except ValueError:
+        tokens = cmd.split()
+    segment: List[str] = []
+    for tok in tokens + [";"]:
+        if tok in _SHELL_OPS:
+            for part in segment[:5]:  # tool sits within a few tokens of wrappers like 'rtk proxy' or 'python3 -m'
+                name = Path(part).name
+                if name in COMMON_BINS:
+                    return name
+            segment = []
+        else:
+            segment.append(tok)
+    return None
 
 
 class FactsEngine:
@@ -429,24 +453,9 @@ class FactsEngine:
         if not failed_cmd or not succeeded_cmd or failed_cmd.strip() == succeeded_cmd.strip():
             return None
 
-        f_parts = failed_cmd.strip().split()
-        s_parts = succeeded_cmd.strip().split()
-        if not f_parts or not s_parts:
-            return None
-
-        # Case 1: Same base executable, added flags (e.g. 'bruno run uat' -> 'bruno run uat --condense')
-        f_bin = Path(f_parts[0]).name
-        s_bin = Path(s_parts[0]).name
-
-        # Case 2: Wrapped runner (e.g. 'pytest tests/' -> 'python3 -m pytest tests/' or 'poetry run pytest tests/')
-        common_bins = {"pytest", "bruno", "npm", "pnpm", "yarn", "cargo", "go", "docker", "uv", "poetry", "ruff", "mypy"}
-        target_bin = None
-        if f_bin == s_bin and f_bin in common_bins:
-            target_bin = f_bin
-        elif f_bin in common_bins and f_bin in s_parts:
-            target_bin = f_bin
-
-        if not target_bin:
+        # Same tool in both commands, even behind wrappers ('cd x && rtk proxy pytest', 'python3 -m pytest')
+        target_bin = find_common_bin(failed_cmd)
+        if not target_bin or find_common_bin(succeeded_cmd) != target_bin:
             return None
 
         # Avoid overwriting manual facts for this binary

@@ -13,8 +13,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine
+from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, find_common_bin
 
+RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
 VOLATILE_ARG_KEYS = {"toolSummary", "WaitMsBeforeAsync", "description", "timeout", "IsDaemon"}
 TRIVIAL_CLI_FLAGS_RE = re.compile(
     r"(?:^|\s)(?:-v+|-q|--quiet|--verbose|--tb=(?:short|long|line|native|no)|--no-header)(?=\s|$)"
@@ -104,6 +105,7 @@ class LoopGuard:
             "consecutive_errors_count": 0,
             "last_call_hash": None,
             "last_failed_cmd": None,
+            "calls_since_failed_cmd": 0,
             "injected_fact_ids": [],
             "interventions": 0,
         }
@@ -243,14 +245,20 @@ class LoopGuard:
             state["consecutive_errors_count"] = prev_errors + 1
             if cmd:
                 state["last_failed_cmd"] = cmd
+                state["calls_since_failed_cmd"] = 0
             if engine:
                 engine.update_metrics(tool_calls_total=1, tool_calls_failed=1)
         else:
             is_first_try = (prev_errors == 0 and state.get("consecutive_identical_count", 1) <= 1)
-            if prev_errors > 0 and state.get("last_failed_cmd") and cmd and engine:
-                engine.auto_learn_from_recovery(state["last_failed_cmd"], cmd)
             state["consecutive_errors_count"] = 0
-            state["last_failed_cmd"] = None
+            failed_cmd = state.get("last_failed_cmd")
+            if failed_cmd and cmd:
+                if engine:
+                    engine.auto_learn_from_recovery(failed_cmd, cmd)
+                # Keep the failure across unrelated commands, but not forever.
+                if find_common_bin(cmd) == find_common_bin(failed_cmd) or state.get("calls_since_failed_cmd", 0) >= RECOVERY_WINDOW:
+                    state["last_failed_cmd"] = None
+            # Non-command tools (Read/Edit...) between failure and retry must not erase it.
             if engine:
                 engine.update_metrics(
                     tool_calls_total=1,
@@ -266,6 +274,8 @@ class LoopGuard:
             "error_msg": str(error)[:100] if error else None,
         })
         state["history"] = history[-20:]
+        if state.get("last_failed_cmd") and not error:
+            state["calls_since_failed_cmd"] = state.get("calls_since_failed_cmd", 0) + 1
 
         self._save_state(state)
 

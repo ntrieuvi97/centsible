@@ -282,10 +282,11 @@ def handle_hook_claude_pre_tool() -> None:
     sys.exit(0)
 
 
-def handle_hook_claude_post_tool() -> None:
+def handle_hook_claude_post_tool(failed: bool = False) -> None:
     """
-    Claude Code Hook: PostToolUse.
+    Claude Code Hook: PostToolUse (success) / PostToolUseFailure (failed=True).
     Records tool outcome to track failure streaks and auto-learn recoveries.
+    Claude Code only fires PostToolUse on success, so failures arrive via PostToolUseFailure.
     """
     try:
         raw_input = sys.stdin.read()
@@ -298,6 +299,8 @@ def handle_hook_claude_post_tool() -> None:
     session_id = payload.get("session_id", "default")
     cwd = payload.get("cwd") or str(Path.cwd())
     error = extract_error_from_payload(payload)
+    if failed and not error:
+        error = "tool failed"
 
     tool_call = {
         "name": tool_name,
@@ -331,6 +334,7 @@ def main() -> int:
     hook_sub.add_parser("claude-prompt", help="Claude Code UserPromptSubmit hook")
     hook_sub.add_parser("claude-pre-tool", help="Claude Code PreToolUse hook")
     hook_sub.add_parser("claude-post-tool", help="Claude Code PostToolUse hook")
+    hook_sub.add_parser("claude-post-tool-failure", help="Claude Code PostToolUseFailure hook")
 
     # Facts group
     facts_parser = subparsers.add_parser("facts", help="Manage repository micro-facts")
@@ -386,6 +390,9 @@ def main() -> int:
             return 0
         elif args.hook_type == "claude-post-tool":
             handle_hook_claude_post_tool()
+            return 0
+        elif args.hook_type == "claude-post-tool-failure":
+            handle_hook_claude_post_tool(failed=True)
             return 0
         else:
             hook_parser.print_help()

@@ -80,6 +80,20 @@ class TestLoopGuard(unittest.TestCase):
         decision, reason = self.guard.check_pre_tool_use(tool_call_3)
         self.assertEqual(decision, "allow")
 
+    def test_auto_learn_survives_unrelated_tool_between_failure_and_retry(self):
+        engine = FactsEngine(Path(tempfile.mkdtemp()) / "facts.jsonl")
+        failed = {"name": "Bash", "args": {"command": "pytest tests/"}}
+        read = {"name": "Read", "args": {"file_path": "/x"}}
+        retry = {"name": "Bash", "args": {"command": "python3 -m pytest tests/ -q"}}
+
+        self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
+        self.guard.record_post_tool_use(read, error=None, engine=engine)
+        self.guard.record_post_tool_use(retry, error=None, engine=engine)
+
+        facts = engine.list_facts()
+        self.assertEqual([f["category"] for f in facts], ["auto-learned"])
+        self.assertIsNone(self.guard._load_state()["last_failed_cmd"])
+
     def test_command_normalization_catches_cosmetic_retries(self):
         # Changing toolSummary, WaitMsBeforeAsync, or -v/--tb=short should still count as identical
         call_1 = {"name": "run_command", "args": {"CommandLine": "pytest tests/a.py", "toolSummary": "Run 1", "WaitMsBeforeAsync": 5000}}

@@ -11,6 +11,9 @@ import unittest
 from pathlib import Path
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.loop_guard import get_state_path  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -98,6 +101,25 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(res3.returncode, 2)
         self.assertIn("[LoopGuard Alert]", res3.stderr)
 
+    def test_claude_failure_then_success_auto_learns_fact(self):
+        sid = f"claude_learn_{id(self)}"
+
+        def payload(event, cmd, **extra):
+            return json.dumps({
+                "hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": cmd},
+                "session_id": sid, "cwd": self.temp_dir.name, **extra,
+            })
+
+        # Claude Code sends failures via PostToolUseFailure with a plain 'error' string
+        res = self._run_te(["hook", "claude-post-tool-failure"], payload("PostToolUseFailure", "cd app && pytest tests/", error="Exit code 1"))
+        self.assertEqual(res.returncode, 0)
+        res = self._run_te(["hook", "claude-post-tool"], payload("PostToolUse", "cd app && python3 -m pytest tests/ -q"))
+        self.assertEqual(res.returncode, 0)
+
+        facts = [json.loads(l) for l in self.facts_path.read_text().splitlines() if l.strip()]
+        self.assertEqual([f["category"] for f in facts], ["auto-learned"])
+        get_state_path(sid).unlink(missing_ok=True)
+
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
         plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         marketplace_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
@@ -105,6 +127,7 @@ class TestClaudeIntegration(unittest.TestCase):
 
         self.assertEqual(plugin_manifest["name"], "centsible")
         self.assertIn("./claude-hooks.json", plugin_manifest["hooks"])
+        self.assertIn("PostToolUseFailure", hooks_cfg["hooks"])
         self.assertEqual(marketplace_manifest["plugins"][0]["name"], "centsible")
 
         # Execute the exact shell command from claude-hooks.json with CLAUDE_PLUGIN_ROOT set
