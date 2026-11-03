@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, find_common_bin
 
 RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
+MUTATING_TOOLS = {
+    "Edit", "Write", "MultiEdit", "NotebookEdit",
+    "edit_file", "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file",
+}
 VOLATILE_ARG_KEYS = {"toolSummary", "WaitMsBeforeAsync", "description", "timeout", "IsDaemon"}
 TRIVIAL_CLI_FLAGS_RE = re.compile(
     r"(?:^|\s)(?:-v+|-q|--quiet|--verbose|--tb=(?:short|long|line|native|no)|--no-header)(?=\s|$)"
@@ -251,14 +255,19 @@ class LoopGuard:
         else:
             is_first_try = (prev_errors == 0 and state.get("consecutive_identical_count", 1) <= 1)
             state["consecutive_errors_count"] = 0
+            tool_name_cur = tool_call.get("name", "")
             failed_cmd = state.get("last_failed_cmd")
-            if failed_cmd and cmd:
+            if tool_name_cur in MUTATING_TOOLS:
+                # Code/config was modified after failure -> failure was likely a code bug, not a CLI quirk
+                state["last_failed_cmd"] = None
+                state["calls_since_failed_cmd"] = 0
+            elif failed_cmd and cmd:
                 if engine:
                     engine.auto_learn_from_recovery(failed_cmd, cmd)
                 # Keep the failure across unrelated commands, but not forever.
                 if find_common_bin(cmd) == find_common_bin(failed_cmd) or state.get("calls_since_failed_cmd", 0) >= RECOVERY_WINDOW:
                     state["last_failed_cmd"] = None
-            # Non-command tools (Read/Edit...) between failure and retry must not erase it.
+            # Read-only tools (Read/Grep/Glob) between failure and retry preserve last_failed_cmd.
             if engine:
                 engine.update_metrics(
                     tool_calls_total=1,
