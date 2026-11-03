@@ -58,12 +58,14 @@ def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
     """
     if not fact_text or not cmd_text:
         return False
-    flags = re.findall(r"(?:^|\s)(--[a-zA-Z0-9_-]+|-[a-zA-Z0-9])\b", fact_text)
+    # Ignore negative clauses like "instead of '...'" so failed commands/flags aren't required
+    prescribed_text = re.split(r"\binstead of\b", fact_text, flags=re.IGNORECASE)[0]
+    flags = re.findall(r"(?:^|\s)(--[a-zA-Z0-9_-]+|-[a-zA-Z0-9])\b", prescribed_text)
     flags = [fl.strip() for fl in flags if fl.strip()]
     if flags:
         return any(fl not in cmd_text for fl in flags)
     quoted = [
-        q for q in re.findall(r"['\"`]([^'\"`]{2,40})['\"`]", fact_text)
+        q for q in re.findall(r"['\"`]([^'\"`]{2,40})['\"`]", prescribed_text)
         if q.isascii()
     ]
     if quoted:
@@ -127,26 +129,64 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
     return neutral_facts
 
 
-COMMON_BINS = {"pytest", "bruno", "npm", "pnpm", "yarn", "cargo", "go", "docker", "uv", "poetry", "ruff", "mypy"}
+COMMON_BINS = {
+    # Python
+    "pytest", "uv", "poetry", "ruff", "mypy", "pip", "flake8", "black", "alembic", "tox",
+    # JS / TS
+    "npm", "pnpm", "yarn", "bun", "npx", "vitest", "jest", "playwright", "tsc", "eslint", "biome",
+    # Build / API / Infra / DB
+    "bruno", "cargo", "go", "docker", "make", "just", "gradle", "mvn", "dotnet", "prisma", "terraform", "kubectl",
+}
+_RUNNER_BINS = {"uv", "poetry", "npx", "bun", "pnpm", "yarn", "npm"}
 _SHELL_OPS = {"&&", "||", ";", "|"}
 
 
-def find_common_bin(cmd: str) -> Optional[str]:
-    """Return the first known CLI tool near the start of any shell segment, skipping flags and wrappers."""
+def _split_shell_segments(cmd: str) -> List[List[str]]:
     try:
         tokens = shlex.split(cmd, posix=True)
     except ValueError:
         tokens = cmd.split()
-    segment: List[str] = []
+    segments: List[List[str]] = []
+    current: List[str] = []
     for tok in tokens + [";"]:
         if tok in _SHELL_OPS:
-            for part in segment[:5]:  # tool sits within a few tokens of wrappers like 'rtk proxy' or 'python3 -m'
-                name = Path(part).name
-                if name in COMMON_BINS:
-                    return name
-            segment = []
+            if current:
+                segments.append(current)
+                current = []
         else:
-            segment.append(tok)
+            current.append(tok)
+    return segments
+
+
+def find_common_bin(cmd: str) -> Optional[str]:
+    """Return the first known CLI tool near the start of any shell segment, skipping flags and wrappers."""
+    for segment in _split_shell_segments(cmd):
+        matched = [Path(part).name for part in segment[:6] if Path(part).name in COMMON_BINS]
+        if matched:
+            if matched[0] in _RUNNER_BINS and len(matched) > 1:
+                return matched[1]
+            return matched[0]
+    return None
+
+
+def _extract_invocation_signature(cmd: str, target_bin: str) -> Optional[tuple]:
+    """
+    Extract how `target_bin` is invoked (runner prefix, binary path, flags, and non-path subcommands)
+    so commands that only differ by target file path or `cd` directory are not treated as CLI recoveries.
+    """
+    for segment in _split_shell_segments(cmd):
+        for idx, part in enumerate(segment[:6]):
+            if Path(part).name == target_bin:
+                prefix_and_bin = tuple(segment[: idx + 1])
+                rest = segment[idx + 1 :]
+                flags = tuple(t for t in rest if t.startswith("-"))
+                subcommands = tuple(
+                    t for t in rest
+                    if not t.startswith("-")
+                    and "/" not in t
+                    and not re.search(r"\.[a-zA-Z0-9]{1,6}$", t)
+                )
+                return (prefix_and_bin, flags, subcommands)
     return None
 
 
@@ -456,6 +496,10 @@ class FactsEngine:
         # Same tool in both commands, even behind wrappers ('cd x && rtk proxy pytest', 'python3 -m pytest')
         target_bin = find_common_bin(failed_cmd)
         if not target_bin or find_common_bin(succeeded_cmd) != target_bin:
+            return None
+
+        # Ignore if only target file path or working directory changed (not a CLI invocation recovery)
+        if _extract_invocation_signature(failed_cmd, target_bin) == _extract_invocation_signature(succeeded_cmd, target_bin):
             return None
 
         # Avoid overwriting manual facts for this binary

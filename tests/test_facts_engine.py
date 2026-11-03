@@ -112,6 +112,10 @@ class TestFactsEngine(unittest.TestCase):
             ("cd /x && pytest tests/", "cd /x && python3 -m pytest tests/ -q", "pytest"),
             ("rtk pytest tests", "rtk proxy pytest tests -q", "pytest"),
             ("npm test", "npm run test:ci", "npm"),
+            ("vitest", "npx vitest --run", "vitest"),
+            ("pytest tests/", "uv run pytest tests/", "pytest"),
+            ("tsc", "npx tsc --noEmit", "tsc"),
+            ("make build", "make build -j4", "make"),
         ]
         for failed, ok, expected in cases:
             learned = self.engine.auto_learn_from_recovery(failed, ok)
@@ -120,6 +124,13 @@ class TestFactsEngine(unittest.TestCase):
         # Different tools or no known tool -> nothing learned
         self.assertIsNone(self.engine.auto_learn_from_recovery("pytest x", "npm test"))
         self.assertIsNone(self.engine.auto_learn_from_recovery("./foo a", "./foo b"))
+        # Only target path or working directory changed -> not a CLI recovery
+        self.assertIsNone(self.engine.auto_learn_from_recovery("pytest tests/a.py", "pytest tests/b.py"))
+        self.assertIsNone(self.engine.auto_learn_from_recovery("cd /a && pytest", "cd /b && pytest"))
+        # Auto-learned fact with "instead of '...'" does not demand the failed command in PreToolUse
+        self.engine.auto_learn_from_recovery("pytest tests/ --bad-flag", "pytest tests/ -q")
+        valid_call = {"name": "Bash", "args": {"command": "pytest tests/ -q"}}
+        self.assertEqual(self.engine.match_tool_call(valid_call), [])
 
     def test_vietnamese_nfc_nfd_and_accent_insensitive_matching(self):
         import unicodedata

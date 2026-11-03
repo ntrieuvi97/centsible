@@ -84,8 +84,16 @@ class TestLoopGuard(unittest.TestCase):
         engine = FactsEngine(Path(tempfile.mkdtemp()) / "facts.jsonl")
         failed = {"name": "Bash", "args": {"command": "pytest tests/"}}
         read = {"name": "Read", "args": {"file_path": "/x"}}
+        edit = {"name": "Edit", "args": {"file_path": "/x"}}
         retry = {"name": "Bash", "args": {"command": "python3 -m pytest tests/ -q"}}
 
+        # 1. File Edit between failure and retry clears last_failed_cmd (bug fix, not CLI quirk)
+        self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
+        self.guard.record_post_tool_use(edit, error=None, engine=engine)
+        self.guard.record_post_tool_use(retry, error=None, engine=engine)
+        self.assertEqual(engine.list_facts(), [])
+
+        # 2. Read-only tool between failure and retry preserves last_failed_cmd
         self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
         self.guard.record_post_tool_use(read, error=None, engine=engine)
         self.guard.record_post_tool_use(retry, error=None, engine=engine)
