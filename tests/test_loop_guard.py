@@ -165,6 +165,29 @@ class TestLoopGuard(unittest.TestCase):
         self.assertEqual(decision, "ask")
         self.assertIn("[LoopGuard Alert]", reason)
 
+    def test_openclaw_mutating_tools_reset_failed_cmd(self):
+        engine = FactsEngine(Path(tempfile.mkdtemp()) / "facts.jsonl")
+        for tool_name in ("write", "edit", "apply_patch"):
+            failed = {"name": "exec", "args": {"command": "pytest tests/"}}
+            self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
+            self.assertEqual(self.guard._load_state()["last_failed_cmd"], "pytest tests/")
+
+            mutating_call = {"name": tool_name, "args": {"path": "src/app.py"}}
+            self.guard.record_post_tool_use(mutating_call, error=None, engine=engine)
+            self.assertIsNone(self.guard._load_state()["last_failed_cmd"])
+
+    def test_openclaw_exec_volatile_args_and_normalization(self):
+        # Varying workdir, yieldMs, background, pty should still count as identical exec calls
+        call_1 = {"name": "exec", "args": {"command": "npm test", "workdir": "/app", "yieldMs": 1000}}
+        call_2 = {"name": "exec", "args": {"command": "npm test", "background": True, "pty": False}}
+        call_3 = {"name": "exec", "args": {"command": "npm test", "yieldMs": 5000}}
+
+        self.assertEqual(self.guard.check_pre_tool_use(call_1)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(call_2)[0], "allow")
+        decision, reason = self.guard.check_pre_tool_use(call_3)
+        self.assertEqual(decision, "ask")
+        self.assertIn("[LoopGuard Alert]", reason)
+
     def test_extract_error_from_payload_variants(self):
         self.assertEqual(extract_error_from_payload({"exitCode": 2}), "exit code 2")
         self.assertEqual(

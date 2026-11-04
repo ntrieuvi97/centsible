@@ -182,6 +182,23 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(report["transcript"]["discovery_steps_to_first_cmd"], 1)
         self.assertEqual(report["transcript"]["first_try_cmd_rate"], 100.0)
 
+    def test_analyze_transcript_openclaw_exec(self):
+        transcript_path = Path(self.temp_dir.name) / "transcript_openclaw.jsonl"
+        steps = [
+            {"type": "user", "content": "Run build"},
+            {"type": "assistant", "tool_calls": [{"name": "read", "args": {"path": "package.json"}}]},
+            {"type": "assistant", "tool_calls": [{"name": "exec", "args": {"command": "npm run build"}}], "status": "DONE"},
+        ]
+        transcript_path.write_text("\n".join(json.dumps(s) for s in steps) + "\n", encoding="utf-8")
+
+        res = self._run_te(["stats", "--json", "--transcript", str(transcript_path)])
+        self.assertEqual(res.returncode, 0)
+        report = json.loads(res.stdout)
+        self.assertEqual(report["transcript"]["tool_calls"], 2)
+        self.assertEqual(report["transcript"]["command_calls"], 1)
+        self.assertEqual(report["transcript"]["discovery_steps_to_first_cmd"], 1)
+        self.assertEqual(report["transcript"]["first_try_cmd_rate"], 100.0)
+
 
 if __name__ == "__main__":
     unittest.main()
