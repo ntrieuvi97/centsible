@@ -6,6 +6,7 @@ CLI entrypoint and Hook Router for centsible.
 import argparse
 import json
 import os
+import re
 import statistics
 import sys
 from datetime import datetime, timezone
@@ -189,6 +190,11 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
 
 
 MIN_SESSIONS_PER_GROUP = 5
+
+
+def claude_project_dir(cwd: Path) -> Path:
+    """Claude Code stores a repo's transcripts in ~/.claude/projects/<cwd with non-alphanumerics as '-'>."""
+    return Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
 
 
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
@@ -581,7 +587,8 @@ def main() -> int:
     stats_parser = subparsers.add_parser("stats", help="Show token & cost savings metrics and session health")
     stats_parser.add_argument("--rate", type=float, default=DEFAULT_USD_PER_MTOK, help="Blended USD rate per 1M tokens (default: 3.0)")
     stats_parser.add_argument("--transcript", help="Optional path to a session transcript (.jsonl) to analyze")
-    stats_parser.add_argument("--baseline", help="Dir of session transcripts (.jsonl): compare exploration cost before vs after --since")
+    stats_parser.add_argument("--baseline", nargs="?", const="auto", default="auto", help="Dir of session transcripts (.jsonl) to compare exploration cost before vs after --since (default: this repo's Claude Code transcripts, skipped if none)")
+    stats_parser.add_argument("--no-baseline", action="store_true", help="Skip the before/after exploration comparison")
     stats_parser.add_argument("--since", help="ISO date/datetime splitting before/after (default: earliest fact created_at)")
     stats_parser.add_argument("--json", action="store_true", help="Output metrics as JSON")
 
@@ -781,14 +788,24 @@ def main() -> int:
         summary = engine.get_metrics_summary(usd_per_mtok=args.rate)
         transcript_report = analyze_transcript(Path(args.transcript)) if args.transcript else None
         baseline_report = None
-        if args.baseline:
+        auto = args.baseline == "auto"
+        if args.baseline and not args.no_baseline:
             since = _parse_ts(args.since) if args.since else min(
                 filter(None, (_parse_ts(f.get("created_at")) for f in engine.list_facts())), default=None
             )
-            if since is None:
+            baseline_dir = claude_project_dir(Path.cwd()) if auto else Path(args.baseline).expanduser()
+            if auto and (since is None or not baseline_dir.is_dir()):
+                pass  # default mode: nothing to compare, stay silent
+            elif since is None:
                 print("✗ --baseline needs --since (invalid, or no facts with created_at yet).", file=sys.stderr)
                 return 1
-            baseline_report = compare_baseline(Path(args.baseline).expanduser(), since)
+            elif not baseline_dir.is_dir():
+                print(f"✗ --baseline dir not found: {baseline_dir}", file=sys.stderr)
+                return 1
+            else:
+                baseline_report = compare_baseline(baseline_dir, since)
+                if auto and not (baseline_report["before"]["sessions"] or baseline_report["after"]["sessions"]):
+                    baseline_report = None
         if args.json:
             payload_out: Dict[str, Any] = {"metrics": summary}
             if transcript_report:

@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.3.3](https://img.shields.io/badge/Version-0.3.3-orange.svg)](#)
+[![Version: 0.3.4](https://img.shields.io/badge/Version-0.3.4-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -45,7 +45,7 @@ ln -sf ~/.gemini/config/plugins/centsible/bin/centsible ~/.local/bin/centsible
 ```bash
 # System status & ROI metrics
 centsible status
-centsible stats [--rate 3.0] [--transcript session.jsonl] [--baseline ~/.claude/projects/<repo> [--since 2026-11-04]]
+centsible stats [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--since 2026-11-04] [--no-baseline]   # baseline auto-detects this repo's transcripts
 
 # Manage micro-facts and architectural gotchas
 centsible facts add --pattern "pytest" --fact "Run with 'pytest tests/ -q --tb=short'"
