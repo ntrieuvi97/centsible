@@ -103,7 +103,7 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
             for tc in tool_calls:
                 stats["tool_calls"] += 1
                 t_name = str(tc.get("name") or tc.get("tool") or "")
-                is_cmd = t_name in ("run_command", "Bash", "bash", "execute_command")
+                is_cmd = t_name in ("run_command", "Bash", "bash", "execute_command", "exec")
                 if not saw_first_cmd:
                     if is_cmd:
                         saw_first_cmd = True

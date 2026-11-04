@@ -20,8 +20,12 @@ RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-lear
 MUTATING_TOOLS = {
     "Edit", "Write", "MultiEdit", "NotebookEdit",
     "edit_file", "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file",
+    "write", "edit", "apply_patch",
 }
-VOLATILE_ARG_KEYS = {"toolSummary", "WaitMsBeforeAsync", "description", "timeout", "IsDaemon"}
+VOLATILE_ARG_KEYS = {
+    "toolSummary", "WaitMsBeforeAsync", "description", "timeout", "IsDaemon",
+    "workdir", "yieldMs", "background", "pty",
+}
 TRIVIAL_CLI_FLAGS_RE = re.compile(
     r"(?:^|\s)(?:-v+|-q|--quiet|--verbose|--tb=(?:short|long|line|native|no)|--no-header)(?=\s|$)"
 )
