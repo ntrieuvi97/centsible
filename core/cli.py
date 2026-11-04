@@ -437,6 +437,11 @@ def main() -> int:
     # status command
     subparsers.add_parser("status", help="Show system status and facts count")
 
+    # harvest command
+    harvest_parser = subparsers.add_parser("harvest", help="Display or output agentic fact harvest instructions")
+    harvest_parser.add_argument("--prompt", action="store_true", help="Output raw prompt suitable for an LLM agent")
+    harvest_parser.add_argument("--force", action="store_true", help="Force harvest even if facts already exist")
+
     # stats command
     stats_parser = subparsers.add_parser("stats", help="Show token & cost savings metrics and session health")
     stats_parser.add_argument("--rate", type=float, default=DEFAULT_USD_PER_MTOK, help="Blended USD rate per 1M tokens (default: 3.0)")
@@ -570,6 +575,40 @@ def main() -> int:
         print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% ({summary['tool_calls_total']} tool calls)")
         print("• Loop Guard:     Enabled (pre-tool threshold: 3 identical, 2 errors)")
         print("• Status:         Active")
+        if summary['total_facts'] == 0:
+            print("• Tip:            No facts found. Run '/centsible-harvest' or 'centsible harvest' to discover golden facts.")
+        return 0
+
+    elif args.command == "harvest":
+        summary = engine.get_metrics_summary()
+        if args.prompt:
+            prompt_text = (
+                "You are the Centsible Fact Harvester 🪙.\n"
+                "Systematically explore this repository and capture 5 to 8 high-signal Golden Micro-Facts "
+                "to maximize future token efficiency and prevent agent trial-and-error loops.\n\n"
+                "Execution Procedure:\n"
+                "1. Inspect lockfiles to determine canonical package manager (pnpm, bun, yarn, poetry, cargo, go).\n"
+                "2. Inspect CI/CD (.github/workflows/, .gitlab-ci.yml) for exact test/build/lint commands and flags.\n"
+                "3. Inspect README / configs for architectural gotchas, required env vars, or prohibited patterns.\n"
+                "4. Distill 5 to 8 Golden Facts: strictly 1 imperative sentence (<= 120 chars) with targeted regex trigger.\n"
+                "5. Save each fact via: centsible facts add --pattern \"<pattern>\" --fact \"<fact>\" --category \"<category>\"\n"
+                "6. Run 'centsible facts list' and summarize the saved facts."
+            )
+            print(prompt_text)
+            return 0
+
+        print("=== Centsible Fact Harvester 🪙 ===")
+        print(f"• Storage Path:   {engine.storage_path}")
+        print(f"• Active Facts:   {summary['total_facts']}")
+        if summary["total_facts"] > 0 and not args.force:
+            print("\nRepo already has active micro-facts. Use 'centsible facts list' to inspect.")
+            print("To rerun discovery, pass '--force' or run '/centsible-harvest' in your agent.")
+            return 0
+
+        print("\nTo harvest 5-8 golden architectural facts for this repo:")
+        print("  1. In Claude Code:    Type '/centsible-harvest'")
+        print("  2. In Antigravity:    Ask your agent: \"Run centsible harvest to discover golden facts\"")
+        print("  3. View Raw Prompt:   Run 'centsible harvest --prompt'")
         return 0
 
     elif args.command == "stats":

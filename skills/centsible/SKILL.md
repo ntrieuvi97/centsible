@@ -59,3 +59,12 @@ Verify what facts trigger for a specific user prompt:
 ```bash
 ./bin/centsible facts remove <id_or_pattern>
 ```
+
+### 6. Harvest Golden Facts (Agentic Multi-Turn Discovery)
+When working in a new repository or after a fresh install, discover 5–8 golden architectural facts:
+```bash
+./bin/centsible harvest
+./bin/centsible harvest --prompt
+```
+- In Claude Code: type `/centsible-harvest`
+- In Antigravity: ask your agent `"Run centsible harvest to discover golden facts for this repo"`
