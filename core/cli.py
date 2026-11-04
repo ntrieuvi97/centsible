@@ -573,7 +573,7 @@ def main() -> int:
         print(f"• Loop Stops:     {summary['loop_interventions']}")
         print(f"• Tokens Saved:   ~{summary['net_saved_tokens']:,} tokens ({summary['saved_cents']:.2f}¢ / ${summary['saved_usd']:.4f})")
         print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% ({summary['tool_calls_total']} tool calls)")
-        print("• Loop Guard:     Enabled (pre-tool threshold: 3 identical, 2 errors)")
+        print(f"• Loop Guard:     Enabled (mode {resolve_mode()}: {resolve_threshold('max_identical_calls')} identical, {resolve_threshold('max_consecutive_errors')} errors)")
         print("• Status:         Active")
         if summary['total_facts'] == 0:
             print("• Tip:            No facts found. Run '/centsible-harvest' or 'centsible harvest' to discover golden facts.")

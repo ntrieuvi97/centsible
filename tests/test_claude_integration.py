@@ -34,6 +34,7 @@ class TestClaudeIntegration(unittest.TestCase):
             capture_output=True,
             text=True,
             cwd=self.temp_dir.name,
+            env={k: v for k, v in subprocess.os.environ.items() if not k.startswith("CENTSIBLE_")} | {"CENTSIBLE_HOME": self.temp_dir.name},
         )
 
     def test_claude_prompt_hook_injects_additional_context(self):
