@@ -11,13 +11,11 @@ These operational guidelines ensure maximum token efficiency and prevent runaway
 - When `[CENTSIBLE MICRO-SKILLS]` are injected in your turn context, strictly follow them.
 - They represent verified repository-specific facts (e.g., specific test flags, required env vars, file paths) learned from past sessions to save research tokens.
 
-## 3. Autonomous Self-Learning & Gotcha Capture (Tự học & Đúc kết kinh nghiệm)
-- **Immediate Capture:** When resolving a tricky gotcha, obscure command flag, or environment quirk that would otherwise take multiple turns to rediscover, record it immediately:
-  ```bash
-  ./bin/centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_summary>" --category gotcha
-  ```
-- **End-of-Session Wrap-Up Check:** Before concluding any task or session where you executed commands or edited files, perform a quick self-reflection:
-  - Did you discover or verify any repo-specific test command, build tool, required flag, or non-obvious architecture pattern?
-  - If YES: Save it with `./bin/centsible facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"` before your final response.
-  - If NO new patterns were discovered: Complete normally without adding bloat.
+## 3. Autonomous In-Turn Self-Learning (Tự học ngay trong phiên — Zero Extra Turn)
+- **Zero-Extra-Turn Policy:** Never wait for an end-of-session Stop hook or user reminder to record facts.
+- **Save Before Final Response:** Before writing your final textual answer to the user on any task that touched files or ran commands, perform a quick self-reflection:
+  - Did you verify or resolve any repo-specific test command, build flag, environment quirk, or architecture convention?
+  - If **YES**: Execute `./bin/centsible facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"` as your LAST tool call BEFORE emitting your final textual response.
+  - If **NO**: Proceed directly to your final response without recording bloat.
+- Doing this in-turn guarantees your rich final answer remains prominently visible to the user without being collapsed or superseded by an unnecessary continuation turn.
 - Keep facts strictly to **one concise imperative line** (≤ 120 chars) without conversational filler.

@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.3.2](https://img.shields.io/badge/Version-0.3.2-orange.svg)](#)
+[![Version: 0.3.3](https://img.shields.io/badge/Version-0.3.3-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -58,9 +58,9 @@ centsible facts remove <id_or_pattern>
 centsible harvest [--prompt] [--force]
 # Or in Claude Code chat: /centsible-harvest
 
-# Configure loop guard & end-of-session reflection
+# Configure loop guard & reflection modes (inline | hook | off)
 centsible config mode ultra
-centsible config reflect on          # on (default) | off (disable wrap-up reflection nudge)
+centsible config reflect inline       # inline (default, zero extra turns) | hook | off
 centsible config list
 centsible config set max_consecutive_errors 4
 ```

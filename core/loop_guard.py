@@ -47,8 +47,30 @@ MODES = {
 
 REFLECT_ENV = "CENTSIBLE_REFLECT"
 AUTO_LEARN_ENV = "CENTSIBLE_AUTO_LEARN_NUDGE"
-DEFAULT_REFLECT = "on"
-REFLECT_CHOICES = ["on", "off"]
+DEFAULT_REFLECT = "inline"
+REFLECT_MODES = {
+    "inline": "In-turn reflection (recommended): agent records facts as a tool call before final answer; zero extra turns, answers never collapsed in UI.",
+    "hook": "Stop hook reflection: blocks termination and forces a continuation turn to remind agent.",
+    "off": "Disabled: no reflection prompts or stop hook interventions.",
+}
+REFLECT_CHOICES = ["inline", "hook", "off", "on"]
+
+
+def normalize_reflect_mode(raw: Any) -> Optional[str]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return "inline" if raw else "off"
+    s = str(raw).strip().lower()
+    if s in ("inline", "in-turn"):
+        return "inline"
+    if s in ("hook", "stop"):
+        return "hook"
+    if s in ("on", "1", "true", "yes"):
+        return "inline"
+    if s in ("off", "0", "false", "no"):
+        return "off"
+    return None
 
 
 def get_config_path() -> Path:
@@ -79,24 +101,23 @@ def resolve_mode() -> str:
 
 
 def resolve_reflect() -> str:
-    """Reflect state from env var, else config.json, else on; unknown values are skipped."""
+    """Reflect mode from env var, else config.json, else 'inline'."""
     for env_key in (REFLECT_ENV, AUTO_LEARN_ENV):
         val = os.environ.get(env_key)
-        if val and val.strip():
-            return "off" if val.strip().lower() in ("0", "false", "no", "off") else "on"
+        mode = normalize_reflect_mode(val)
+        if mode:
+            return mode
     cfg = load_config()
     for k in ("reflect", "auto_learn_nudge"):
         if k in cfg:
-            val = cfg[k]
-            if isinstance(val, bool):
-                return "on" if val else "off"
-            if isinstance(val, (int, str)):
-                return "off" if str(val).lower() in ("0", "false", "no", "off") else "on"
+            mode = normalize_reflect_mode(cfg[k])
+            if mode:
+                return mode
     return DEFAULT_REFLECT
 
 
 def is_auto_learn_nudge_enabled() -> bool:
-    return resolve_reflect() == "on"
+    return resolve_reflect() != "off"
 
 
 def resolve_threshold(key: str) -> int:
@@ -414,8 +435,10 @@ class LoopGuard:
         Check if the agent should be nudged to self-learn / capture facts before stopping.
         Returns the nudge prompt string if eligible, or None.
         Guarantees at most ONE nudge per session.
+        In default 'inline' mode, clean task completions do not block Stop to avoid extra turns and UI answer collapse.
         """
-        if not is_auto_learn_nudge_enabled():
+        mode = resolve_reflect()
+        if mode == "off":
             return None
 
         state = self._load_state()
@@ -439,18 +462,19 @@ class LoopGuard:
                 f"[Centsible] {failures} tool failure(s) occurred this session. If you found a non-obvious gotcha "
                 "(file/CLI quirk, wrong flag, or environment rule a future session would trip on), save it now: "
                 "`centsible facts add --pattern \"<file|tool>\" --fact \"<one-line rule>\" --category gotcha`. "
-                "If nothing is worth keeping, simply conclude."
+                "IMPORTANT: Conclude with a brief summary of your work so your answer is visible in this turn."
             )
 
-        # Priority 2: Session had meaningful work (mutating tools, or at least 2 tool calls like tests/builds)
-        if mutations >= 1 or tool_calls >= 2:
+        # Priority 2: Session had meaningful work with 0 failures:
+        # ONLY fire in 'hook' mode! In 'inline' mode, do not force an extra turn on clean runs.
+        if mode == "hook" and (mutations >= 1 or tool_calls >= 2):
             state["wrapup_nudged"] = True
             self._save_state(state)
             return (
                 "[Centsible Wrap-Up] Task finished. Before concluding, reflect: "
                 "Did you verify any repo-specific test commands, flags, gotchas, or setup quirks? "
                 "If YES: Save it now with `centsible facts add --pattern \"<trigger>\" --fact \"<one-line rule>\" --category <gotcha|workflow>`. "
-                "If NO new facts were learned, simply conclude."
+                "IMPORTANT: Conclude with a brief summary of your work so your answer is visible in this turn."
             )
 
         return None

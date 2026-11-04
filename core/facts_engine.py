@@ -665,6 +665,7 @@ class FactsEngine:
         self,
         matched_facts: List[Dict],
         correction_hint: Optional[str] = None,
+        reflect_mode: Optional[str] = None,
     ) -> Optional[str]:
         """Format matched facts and optional correction nudge into a single concise prompt injection block."""
         if not matched_facts and not correction_hint:
@@ -678,6 +679,8 @@ class FactsEngine:
                 lines.append(f"- {f.get('fact')}")
         if correction_hint:
             lines.append(correction_hint)
+        if reflect_mode == "inline":
+            lines.append("[Centsible Self-Learning] If you discover new repo quirks or command flags in this turn, save them via 'centsible facts add' before your final response.")
 
         return "\n".join(lines)
 
