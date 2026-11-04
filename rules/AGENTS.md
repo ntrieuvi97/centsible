@@ -11,9 +11,13 @@ These operational guidelines ensure maximum token efficiency and prevent runaway
 - When `[CENTSIBLE MICRO-SKILLS]` are injected in your turn context, strictly follow them.
 - They represent verified repository-specific facts (e.g., specific test flags, required env vars, file paths) learned from past sessions to save research tokens.
 
-## 3. Capture Reusable Discoveries (Ghi nhận kinh nghiệm mới)
-- When resolving a tricky gotcha, obscure command flag, or environment quirk that would otherwise take multiple turns to rediscover, record it using:
+## 3. Autonomous Self-Learning & Gotcha Capture (Tự học & Đúc kết kinh nghiệm)
+- **Immediate Capture:** When resolving a tricky gotcha, obscure command flag, or environment quirk that would otherwise take multiple turns to rediscover, record it immediately:
   ```bash
-  ./bin/centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_summary>"
+  ./bin/centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_summary>" --category gotcha
   ```
-- Keep facts strictly to **one concise line** without conversational filler.
+- **End-of-Session Wrap-Up Check:** Before concluding any task or session where you executed commands or edited files, perform a quick self-reflection:
+  - Did you discover or verify any repo-specific test command, build tool, required flag, or non-obvious architecture pattern?
+  - If YES: Save it with `./bin/centsible facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"` before your final response.
+  - If NO new patterns were discovered: Complete normally without adding bloat.
+- Keep facts strictly to **one concise imperative line** (≤ 120 chars) without conversational filler.

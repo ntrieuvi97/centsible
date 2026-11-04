@@ -45,6 +45,11 @@ MODES = {
     "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5},
 }
 
+REFLECT_ENV = "CENTSIBLE_REFLECT"
+AUTO_LEARN_ENV = "CENTSIBLE_AUTO_LEARN_NUDGE"
+DEFAULT_REFLECT = "on"
+REFLECT_CHOICES = ["on", "off"]
+
 
 def get_config_path() -> Path:
     env_home = os.environ.get("CENTSIBLE_HOME")
@@ -71,6 +76,27 @@ def resolve_mode() -> str:
         if raw in MODES:
             return raw
     return DEFAULT_MODE
+
+
+def resolve_reflect() -> str:
+    """Reflect state from env var, else config.json, else on; unknown values are skipped."""
+    for env_key in (REFLECT_ENV, AUTO_LEARN_ENV):
+        val = os.environ.get(env_key)
+        if val and val.strip():
+            return "off" if val.strip().lower() in ("0", "false", "no", "off") else "on"
+    cfg = load_config()
+    for k in ("reflect", "auto_learn_nudge"):
+        if k in cfg:
+            val = cfg[k]
+            if isinstance(val, bool):
+                return "on" if val else "off"
+            if isinstance(val, (int, str)):
+                return "off" if str(val).lower() in ("0", "false", "no", "off") else "on"
+    return DEFAULT_REFLECT
+
+
+def is_auto_learn_nudge_enabled() -> bool:
+    return resolve_reflect() == "on"
 
 
 def resolve_threshold(key: str) -> int:
@@ -173,6 +199,10 @@ class LoopGuard:
             "injected_fact_ids": [],
             "interventions": 0,
             "session_failures": 0,
+            "session_tool_calls": 0,
+            "session_mutations": 0,
+            "facts_added_in_session": False,
+            "wrapup_nudged": False,
         }
 
     def _load_state(self) -> Dict[str, Any]:
@@ -355,6 +385,17 @@ class LoopGuard:
         if state.get("last_failed_cmd") and not error:
             state["calls_since_failed_cmd"] = state.get("calls_since_failed_cmd", 0) + 1
 
+        # Track session activity for autonomous end-of-session self-learning
+        state["session_tool_calls"] = state.get("session_tool_calls", 0) + 1
+        cmd_str = str(cmd or "")
+        if tool_name in MUTATING_TOOLS or (
+            cmd_str and any(kw in cmd_str for kw in ("git commit", "git checkout", "git merge", "npm install", "pip install"))
+        ):
+            state["session_mutations"] = state.get("session_mutations", 0) + 1
+
+        if cmd_str and ("facts add" in cmd_str or ("facts" in cmd_str and "add" in cmd_str)):
+            state["facts_added_in_session"] = True
+
         self._save_state(state)
 
     def consume_gotcha_nudge(self, min_failures: int = STOP_NUDGE_MIN_FAILURES) -> int:
@@ -364,8 +405,55 @@ class LoopGuard:
         if failures < min_failures:
             return 0
         state["session_failures"] = 0
+        state["wrapup_nudged"] = True
         self._save_state(state)
         return failures
+
+    def consume_wrapup_nudge(self) -> Optional[str]:
+        """
+        Check if the agent should be nudged to self-learn / capture facts before stopping.
+        Returns the nudge prompt string if eligible, or None.
+        Guarantees at most ONE nudge per session.
+        """
+        if not is_auto_learn_nudge_enabled():
+            return None
+
+        state = self._load_state()
+        if state.get("wrapup_nudged", False):
+            return None
+
+        # If the agent already added a fact in this session, no need to nudge
+        if state.get("facts_added_in_session", False):
+            return None
+
+        failures = state.get("session_failures", 0)
+        tool_calls = state.get("session_tool_calls", 0)
+        mutations = state.get("session_mutations", 0)
+
+        # Priority 1: Failures encountered during session (nudge to save gotchas)
+        if failures >= STOP_NUDGE_MIN_FAILURES:
+            state["wrapup_nudged"] = True
+            state["session_failures"] = 0
+            self._save_state(state)
+            return (
+                f"[Centsible] {failures} tool failure(s) occurred this session. If you found a non-obvious gotcha "
+                "(file/CLI quirk, wrong flag, or environment rule a future session would trip on), save it now: "
+                "`centsible facts add --pattern \"<file|tool>\" --fact \"<one-line rule>\" --category gotcha`. "
+                "If nothing is worth keeping, simply conclude."
+            )
+
+        # Priority 2: Session had meaningful work (mutating tools, or at least 2 tool calls like tests/builds)
+        if mutations >= 1 or tool_calls >= 2:
+            state["wrapup_nudged"] = True
+            self._save_state(state)
+            return (
+                "[Centsible Wrap-Up] Task finished. Before concluding, reflect: "
+                "Did you verify any repo-specific test commands, flags, gotchas, or setup quirks? "
+                "If YES: Save it now with `centsible facts add --pattern \"<trigger>\" --fact \"<one-line rule>\" --category <gotcha|workflow>`. "
+                "If NO new facts were learned, simply conclude."
+            )
+
+        return None
 
     def reset(self) -> None:
         """Clear state for this conversation."""

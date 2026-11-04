@@ -23,15 +23,19 @@ This skill allows the agent and user to manage experience-driven micro-facts and
 ./bin/centsible stats --transcript <path_to_transcript.jsonl> --json
 ```
 
-### Loop Guard Thresholds
-Pick a mode preset, or fine-tune the numbers. Modes (errors / identical calls): `ultra` 2/3, `normal` 3/4 (default), `weak` 4/5.
+### Loop Guard Thresholds & Reflection
+Pick a mode preset, or fine-tune thresholds and end-of-session reflection.
+- Modes (errors / identical calls): `ultra` 2/3, `normal` 3/4 (default), `weak` 4/5.
+- Reflection nudge (`on` | `off`): prompts agent to save discovered facts/gotchas on session wrap-up.
 ```bash
 ./bin/centsible config mode ultra
+./bin/centsible config reflect off    # Disable wrap-up reflection nudge
+./bin/centsible config reflect on     # Enable wrap-up reflection nudge (default)
 ./bin/centsible config list
 ./bin/centsible config set max_consecutive_errors 4
 ./bin/centsible config unset max_consecutive_errors
 ```
-Keys: `max_consecutive_errors`, `max_identical_calls`. Numeric keys override the mode. Env vars `CENTSIBLE_LOOP_MODE` / `CENTSIBLE_MAX_*` override the file.
+Keys: `mode`, `reflect`, `max_consecutive_errors`, `max_identical_calls`. Env vars `CENTSIBLE_LOOP_MODE`, `CENTSIBLE_REFLECT`, `CENTSIBLE_MAX_*` override the file.
 
 ### 2. List Micro-Facts
 ```bash
