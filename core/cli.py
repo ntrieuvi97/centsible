@@ -359,6 +359,36 @@ def handle_hook_claude_post_tool(failed: bool = False) -> None:
     sys.stdout.flush()
 
 
+def handle_hook_claude_stop() -> None:
+    """
+    Claude Code Hook: Stop. If the agent hit repeated tool failures this session, block the stop once
+    so it can persist any gotcha it discovered (the user-prompt nudge never fires for agent-found gotchas).
+    """
+    try:
+        raw_input = sys.stdin.read()
+        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
+    except Exception:
+        payload = {}
+
+    output: Dict[str, Any] = {}
+    # stop_hook_active: we already forced a continuation this stop cycle; never loop.
+    if not payload.get("stop_hook_active"):
+        failures = LoopGuard(payload.get("session_id", "default")).consume_gotcha_nudge()
+        if failures:
+            output = {
+                "decision": "block",
+                "reason": (
+                    f"[Centsible] {failures} tool failures this session. If you found a non-obvious gotcha "
+                    "(file/CLI quirk, wrong flag, rule a future session would trip on), save it: "
+                    "`centsible facts add --pattern \"<file|tool>\" --fact \"<one-line rule>\" --category gotcha`. "
+                    "If nothing is worth keeping, just say so and finish."
+                ),
+            }
+
+    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="centsible",
@@ -379,6 +409,7 @@ def main() -> int:
     hook_sub.add_parser("claude-pre-tool", help="Claude Code PreToolUse hook")
     hook_sub.add_parser("claude-post-tool", help="Claude Code PostToolUse hook")
     hook_sub.add_parser("claude-post-tool-failure", help="Claude Code PostToolUseFailure hook")
+    hook_sub.add_parser("claude-stop", help="Claude Code Stop hook")
 
     # Facts group
     facts_parser = subparsers.add_parser("facts", help="Manage repository micro-facts")
@@ -450,6 +481,9 @@ def main() -> int:
             return 0
         elif args.hook_type == "claude-post-tool-failure":
             handle_hook_claude_post_tool(failed=True)
+            return 0
+        elif args.hook_type == "claude-stop":
+            handle_hook_claude_stop()
             return 0
         else:
             hook_parser.print_help()
