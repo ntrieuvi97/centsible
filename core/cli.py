@@ -6,9 +6,11 @@ CLI entrypoint and Hook Router for centsible.
 import argparse
 import json
 import os
+import statistics
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # Ensure repo root is in sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -16,11 +18,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, get_default_facts_path
+from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, estimate_tokens, get_default_facts_path
 from core.loop_guard import (
     CONFIG_KEYS,
     MODE_ENV,
     MODES,
+    MUTATING_TOOLS,
     LoopGuard,
     extract_error_from_payload,
     get_config_path,
@@ -49,13 +52,31 @@ def ensure_cli_symlink() -> None:
         pass
 
 
+def _blocks(step: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Content blocks of a Claude Code message (tool_use / tool_result / text), else []."""
+    msg = step.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def _result_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return ""
+
+
 def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
     """
     Analyze an Antigravity or Claude Code JSONL session transcript to measure
     tool error rates, retry streaks, discovery steps, and token efficiency.
+    Claude Code format: tool_use blocks sit in assistant messages, their tool_result
+    (is_error, output) in the following user message; subagent (sidechain) steps are skipped.
     """
     stats: Dict[str, Any] = {
         "path": str(transcript_path),
+        "started_at": None,
         "total_steps": 0,
         "user_turns": 0,
         "tool_calls": 0,
@@ -64,73 +85,143 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
         "retry_streaks": 0,
         "wasted_retry_calls": 0,
         "discovery_steps_to_first_cmd": 0,
+        "calls_before_first_edit": 0,
+        "tokens_before_first_edit": 0,
+        "edit_calls": 0,
         "first_try_cmd_successes": 0,
         "first_try_cmd_rate": 100.0,
     }
     if not transcript_path.exists():
         return stats
 
-    saw_first_cmd = False
-    discovery_count = 0
-    consecutive_errors = 0
-
+    steps: List[Dict[str, Any]] = []
     with open(transcript_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
-                step = json.loads(line)
+                steps.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
 
-            stats["total_steps"] += 1
-            step_type = step.get("type") or step.get("role") or ""
-            if step_type in ("USER_INPUT", "user"):
-                stats["user_turns"] += 1
+    # tool_use_id -> (is_error, estimated tokens of its output)
+    results: Dict[str, Tuple[bool, int]] = {}
+    for step in steps:
+        for b in _blocks(step):
+            if b.get("type") == "tool_result":
+                results[b.get("tool_use_id")] = (bool(b.get("is_error")), estimate_tokens(_result_text(b.get("content"))))
 
-            tool_calls = step.get("tool_calls") or []
-            if not tool_calls and step.get("tool_name"):
-                tool_calls = [{"name": step.get("tool_name"), "args": step.get("tool_input", {})}]
+    saw_first_cmd = False
+    saw_first_edit = False
+    discovery_count = 0
+    consecutive_errors = 0
 
-            step_failed = (
-                step.get("status") == "ERROR"
-                or extract_error_from_payload(step) is not None
-                or ("Command exited with code " in str(step.get("content", ""))
-                    and "Command exited with code 0" not in str(step.get("content", "")))
-            )
+    for step in steps:
+        if not isinstance(step, dict) or step.get("isSidechain"):
+            continue
+        if not stats["started_at"] and isinstance(step.get("timestamp"), str):
+            stats["started_at"] = step["timestamp"]
+        stats["total_steps"] += 1
+        blocks = _blocks(step)
+        step_type = step.get("type") or step.get("role") or ""
+        carries_results_only = bool(blocks) and all(b.get("type") == "tool_result" for b in blocks)
+        if step_type in ("USER_INPUT", "user") and not carries_results_only:
+            stats["user_turns"] += 1
 
-            for tc in tool_calls:
-                stats["tool_calls"] += 1
-                t_name = str(tc.get("name") or tc.get("tool") or "")
-                is_cmd = t_name in ("run_command", "Bash", "bash", "execute_command", "exec")
-                if not saw_first_cmd:
-                    if is_cmd:
-                        saw_first_cmd = True
-                        stats["discovery_steps_to_first_cmd"] = discovery_count
-                    else:
-                        discovery_count += 1
+        tool_calls = step.get("tool_calls") or []
+        if not tool_calls and step.get("tool_name"):
+            tool_calls = [{"name": step.get("tool_name"), "args": step.get("tool_input", {})}]
+        if not tool_calls:
+            tool_calls = [{"name": b.get("name"), "id": b.get("id")} for b in blocks if b.get("type") == "tool_use"]
+
+        step_failed = (
+            step.get("status") == "ERROR"
+            or extract_error_from_payload(step) is not None
+            or ("Command exited with code " in str(step.get("content", ""))
+                and "Command exited with code 0" not in str(step.get("content", "")))
+            or any(results.get(tc.get("id"), (False, 0))[0] for tc in tool_calls)
+        )
+
+        for tc in tool_calls:
+            stats["tool_calls"] += 1
+            t_name = str(tc.get("name") or tc.get("tool") or "")
+            is_cmd = t_name in ("run_command", "Bash", "bash", "execute_command", "exec")
+            if not saw_first_cmd:
                 if is_cmd:
-                    stats["command_calls"] += 1
-                    if not step_failed and consecutive_errors == 0:
-                        stats["first_try_cmd_successes"] += 1
-
-            if tool_calls:
-                if step_failed:
-                    stats["failed_calls"] += 1
-                    consecutive_errors += 1
-                    if consecutive_errors == 2:
-                        stats["retry_streaks"] += 1
-                    if consecutive_errors >= 2:
-                        stats["wasted_retry_calls"] += 1
+                    saw_first_cmd = True
+                    stats["discovery_steps_to_first_cmd"] = discovery_count
                 else:
-                    consecutive_errors = 0
+                    discovery_count += 1
+            if t_name in MUTATING_TOOLS:
+                stats["edit_calls"] += 1
+                saw_first_edit = True
+            elif not saw_first_edit:
+                # Exploration cost: every call (Read/Grep/Bash/...) and its output before the first edit
+                stats["calls_before_first_edit"] += 1
+                stats["tokens_before_first_edit"] += results.get(tc.get("id"), (False, 0))[1]
+            if is_cmd:
+                stats["command_calls"] += 1
+                if not step_failed and consecutive_errors == 0:
+                    stats["first_try_cmd_successes"] += 1
+
+        if tool_calls:
+            if step_failed:
+                stats["failed_calls"] += 1
+                consecutive_errors += 1
+                if consecutive_errors == 2:
+                    stats["retry_streaks"] += 1
+                if consecutive_errors >= 2:
+                    stats["wasted_retry_calls"] += 1
+            else:
+                consecutive_errors = 0
 
     if stats["command_calls"] > 0:
         stats["first_try_cmd_rate"] = round(
             stats["first_try_cmd_successes"] / stats["command_calls"] * 100.0, 1
         )
     return stats
+
+
+MIN_SESSIONS_PER_GROUP = 5
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    """ISO date/datetime (with or without Z) -> aware UTC datetime; None if unparseable."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def compare_baseline(transcript_dir: Path, since: datetime, min_sessions: int = MIN_SESSIONS_PER_GROUP) -> Dict[str, Any]:
+    """
+    Measure exploration cost (tool calls + output tokens before the first edit) in sessions
+    started before vs after `since`. Sessions without any edit are skipped (pure Q&A has no baseline).
+    Reports medians per group; savings are only reported when both groups have >= min_sessions.
+    """
+    groups: Dict[str, List[Dict[str, Any]]] = {"before": [], "after": []}
+    for path in sorted(transcript_dir.glob("*.jsonl")):
+        r = analyze_transcript(path)
+        started = _parse_ts(r["started_at"]) or datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        if r["edit_calls"] > 0:
+            groups["before" if started < since else "after"].append(r)
+
+    out: Dict[str, Any] = {"since": since.isoformat(), "min_sessions": min_sessions}
+    for name, rows in groups.items():
+        out[name] = {
+            "sessions": len(rows),
+            "median_calls": statistics.median(r["calls_before_first_edit"] for r in rows) if rows else None,
+            "median_tokens": statistics.median(r["tokens_before_first_edit"] for r in rows) if rows else None,
+        }
+    out["enough_data"] = all(out[g]["sessions"] >= min_sessions for g in groups)
+    if out["enough_data"]:
+        out["saved_calls_per_session"] = out["before"]["median_calls"] - out["after"]["median_calls"]
+        out["saved_tokens_per_session"] = out["before"]["median_tokens"] - out["after"]["median_tokens"]
+    return out
 
 
 def handle_hook_pre_invocation() -> None:
@@ -446,6 +537,8 @@ def main() -> int:
     stats_parser = subparsers.add_parser("stats", help="Show token & cost savings metrics and session health")
     stats_parser.add_argument("--rate", type=float, default=DEFAULT_USD_PER_MTOK, help="Blended USD rate per 1M tokens (default: 3.0)")
     stats_parser.add_argument("--transcript", help="Optional path to a session transcript (.jsonl) to analyze")
+    stats_parser.add_argument("--baseline", help="Dir of session transcripts (.jsonl): compare exploration cost before vs after --since")
+    stats_parser.add_argument("--since", help="ISO date/datetime splitting before/after (default: earliest fact created_at)")
     stats_parser.add_argument("--json", action="store_true", help="Output metrics as JSON")
 
     config_parser = subparsers.add_parser("config", help="View or change loop guard thresholds")
@@ -614,10 +707,21 @@ def main() -> int:
     elif args.command == "stats":
         summary = engine.get_metrics_summary(usd_per_mtok=args.rate)
         transcript_report = analyze_transcript(Path(args.transcript)) if args.transcript else None
+        baseline_report = None
+        if args.baseline:
+            since = _parse_ts(args.since) if args.since else min(
+                filter(None, (_parse_ts(f.get("created_at")) for f in engine.list_facts())), default=None
+            )
+            if since is None:
+                print("✗ --baseline needs --since (invalid, or no facts with created_at yet).", file=sys.stderr)
+                return 1
+            baseline_report = compare_baseline(Path(args.baseline).expanduser(), since)
         if args.json:
             payload_out: Dict[str, Any] = {"metrics": summary}
             if transcript_report:
                 payload_out["transcript"] = transcript_report
+            if baseline_report:
+                payload_out["baseline"] = baseline_report
             print(json.dumps(payload_out, ensure_ascii=False, indent=2))
             return 0
 
@@ -641,6 +745,17 @@ def main() -> int:
             print(f"• Tool / Cmd Calls:     {transcript_report['tool_calls']} tools ({transcript_report['command_calls']} commands, {transcript_report['failed_calls']} failed)")
             print(f"• 1st-Try Cmd Success:  {transcript_report['first_try_cmd_rate']:.1f}% (Discovery steps before 1st cmd: {transcript_report['discovery_steps_to_first_cmd']})")
             print(f"• Retry Streaks:        {transcript_report['retry_streaks']} streaks ({transcript_report['wasted_retry_calls']} wasted retry calls)")
+            print(f"• Before 1st Edit:      {transcript_report['calls_before_first_edit']} calls / ~{transcript_report['tokens_before_first_edit']:,} output tokens ({transcript_report['edit_calls']} edit calls)")
+        if baseline_report:
+            b, a = baseline_report["before"], baseline_report["after"]
+            print("--- Measured Exploration Cost (before vs after facts) ---")
+            print(f"• Split at:             {baseline_report['since']}")
+            print(f"• Before:               {b['sessions']} sessions | median {b['median_calls']} calls / {b['median_tokens']} tokens before 1st edit")
+            print(f"• After:                {a['sessions']} sessions | median {a['median_calls']} calls / {a['median_tokens']} tokens before 1st edit")
+            if baseline_report["enough_data"]:
+                print(f"• Measured Saving:      {baseline_report['saved_calls_per_session']:+} calls, {baseline_report['saved_tokens_per_session']:+} tokens per session (negative = worse)")
+            else:
+                print(f"• Measured Saving:      not enough data (need >= {baseline_report['min_sessions']} edit-sessions in each group)")
         return 0
 
     else:
