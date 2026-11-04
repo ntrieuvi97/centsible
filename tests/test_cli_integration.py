@@ -199,6 +199,41 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(report["transcript"]["discovery_steps_to_first_cmd"], 1)
         self.assertEqual(report["transcript"]["first_try_cmd_rate"], 100.0)
 
+    def test_status_tip_when_empty(self):
+        res = self._run_te(["status"])
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("Total Facts:    0", res.stdout)
+        self.assertIn("Tip:            No facts found", res.stdout)
+
+    def test_harvest_cli_flow(self):
+        # 1. Harvest when empty
+        res = self._run_te(["harvest"])
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("To harvest 5-8 golden architectural facts", res.stdout)
+        self.assertIn("Type '/centsible-harvest'", res.stdout)
+
+        # 2. Harvest --prompt
+        res_prompt = self._run_te(["harvest", "--prompt"])
+        self.assertEqual(res_prompt.returncode, 0)
+        self.assertIn("You are the Centsible Fact Harvester", res_prompt.stdout)
+        self.assertIn("Execution Procedure", res_prompt.stdout)
+
+        # 3. Add a fact, then verify harvest reports already active
+        self._run_te([
+            "facts", "add",
+            "--pattern", "pytest",
+            "--fact", "Run pytest -q",
+            "--id", "fact-1",
+        ])
+        res_has_facts = self._run_te(["harvest"])
+        self.assertEqual(res_has_facts.returncode, 0)
+        self.assertIn("Repo already has active micro-facts", res_has_facts.stdout)
+
+        # 4. Harvest with --force overrides active facts check
+        res_force = self._run_te(["harvest", "--force"])
+        self.assertEqual(res_force.returncode, 0)
+        self.assertIn("To harvest 5-8 golden architectural facts", res_force.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
