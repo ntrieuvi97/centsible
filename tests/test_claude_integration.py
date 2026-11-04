@@ -193,13 +193,24 @@ class TestClaudeIntegration(unittest.TestCase):
         # Post edit tool use
         self._run_te(["hook", "claude-post-tool"], edit_payload)
 
-        # Stop hook blocks once with wrap-up nudge
-        out = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        # In default 'inline' mode, clean task completions do NOT block Stop hook (preserves UI response)
+        out_inline = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        self.assertEqual(out_inline, {})
+
+        # In explicit 'hook' mode, Stop hook blocks once with wrap-up nudge
+        sid_hook = f"claude_hook_{id(self)}"
+        edit_hook = json.dumps({
+            "tool_name": "Edit", "tool_input": {"file_path": "main.py"},
+            "session_id": sid_hook, "cwd": self.temp_dir.name,
+        })
+        stop_hook = json.dumps({"session_id": sid_hook, "cwd": self.temp_dir.name})
+        self._run_te(["hook", "claude-post-tool"], edit_hook)
+        out = json.loads(self._run_te(["hook", "claude-stop"], stop_hook, env={"CENTSIBLE_REFLECT": "hook"}).stdout)
         self.assertEqual(out.get("decision"), "block")
         self.assertIn("facts add", out.get("reason", ""))
 
         # Second call allows stop (one-shot)
-        out2 = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        out2 = json.loads(self._run_te(["hook", "claude-stop"], stop_hook, env={"CENTSIBLE_REFLECT": "hook"}).stdout)
         self.assertEqual(out2, {})
 
         # When reflect is off, Stop hook does not block on mutations
@@ -214,6 +225,7 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(out_off, {})
 
         get_state_path(sid).unlink(missing_ok=True)
+        get_state_path(sid_hook).unlink(missing_ok=True)
         get_state_path(sid_off).unlink(missing_ok=True)
 
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):

@@ -31,6 +31,7 @@ from core.loop_guard import (
     extract_error_from_payload,
     get_config_path,
     load_config,
+    normalize_reflect_mode,
     resolve_mode,
     resolve_reflect,
     resolve_threshold,
@@ -261,7 +262,11 @@ def handle_hook_pre_invocation() -> None:
     else:
         correction_hint = detect_user_correction(user_input)
 
-    ephemeral_msg = engine.format_ephemeral_message(matched, correction_hint=correction_hint)
+    ephemeral_msg = engine.format_ephemeral_message(
+        matched,
+        correction_hint=correction_hint,
+        reflect_mode=resolve_reflect(),
+    )
 
     output: Dict[str, Any] = {}
     if ephemeral_msg:
@@ -361,7 +366,11 @@ def handle_hook_claude_prompt() -> None:
     else:
         correction_hint = detect_user_correction(user_prompt)
 
-    context_msg = engine.format_ephemeral_message(matched, correction_hint=correction_hint)
+    context_msg = engine.format_ephemeral_message(
+        matched,
+        correction_hint=correction_hint,
+        reflect_mode=resolve_reflect(),
+    )
 
     output: Dict[str, Any] = {}
     if context_msg:
@@ -581,8 +590,8 @@ def main() -> int:
     config_sub.add_parser("list", help="Show effective mode and thresholds")
     config_mode = config_sub.add_parser("mode", help="Show or set the loop guard mode preset")
     config_mode.add_argument("name", nargs="?", choices=sorted(MODES), help="ultra (strict), normal, weak (tolerant)")
-    config_reflect = config_sub.add_parser("reflect", help="Show or set end-of-session reflection nudge (on | off)")
-    config_reflect.add_argument("state", nargs="?", choices=REFLECT_CHOICES, help="on (nudge agent on session wrap-up, default), off (silent)")
+    config_reflect = config_sub.add_parser("reflect", help="Show or set reflection mode (inline | hook | off)")
+    config_reflect.add_argument("state", nargs="?", choices=REFLECT_CHOICES, help="inline (recommended: in-turn capture, zero extra turns), hook (blocking stop hook), off")
     config_get = config_sub.add_parser("get", help="Show one effective threshold or setting")
     config_get.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect"])
     config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")
@@ -633,8 +642,10 @@ def main() -> int:
             cfg["mode"] = args.name
             save_config(cfg)
         elif args.config_action == "reflect" and getattr(args, "state", None):
-            cfg["reflect"] = args.state
-            save_config(cfg)
+            norm = normalize_reflect_mode(args.state)
+            if norm:
+                cfg["reflect"] = norm
+                save_config(cfg)
         elif args.config_action == "get":
             if args.key == "mode":
                 print(resolve_mode())

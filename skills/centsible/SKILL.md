@@ -24,13 +24,17 @@ This skill allows the agent and user to manage experience-driven micro-facts and
 ```
 
 ### Loop Guard Thresholds & Reflection
-Pick a mode preset, or fine-tune thresholds and end-of-session reflection.
+Pick a mode preset, or fine-tune thresholds and reflection modes.
 - Modes (errors / identical calls): `ultra` 2/3, `normal` 3/4 (default), `weak` 4/5.
-- Reflection nudge (`on` | `off`): prompts agent to save discovered facts/gotchas on session wrap-up.
+- Reflection modes:
+  - `inline` (default): in-turn reflection, agent saves facts before final response; zero extra turns, answers never collapsed in UI.
+  - `hook`: Stop hook reflection; blocks session termination to force a continuation turn.
+  - `off`: disables reflection prompts.
 ```bash
 ./bin/centsible config mode ultra
-./bin/centsible config reflect off    # Disable wrap-up reflection nudge
-./bin/centsible config reflect on     # Enable wrap-up reflection nudge (default)
+./bin/centsible config reflect inline # In-turn reflection without extra turns (default)
+./bin/centsible config reflect hook   # Force extra continuation turn on wrap-up
+./bin/centsible config reflect off    # Disable reflection nudges
 ./bin/centsible config list
 ./bin/centsible config set max_consecutive_errors 4
 ./bin/centsible config unset max_consecutive_errors
