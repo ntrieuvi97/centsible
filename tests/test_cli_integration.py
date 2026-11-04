@@ -26,7 +26,9 @@ class TestCliIntegration(unittest.TestCase):
 
     def _run_te(self, args, stdin_data=None, env=None):
         cmd = [sys.executable, str(REPO_ROOT / "core" / "cli.py")] + args
-        custom_env = dict(subprocess.os.environ)
+        custom_env = dict(subprocess.os.environ, CENTSIBLE_HOME=self.temp_dir.name)
+        for k in ("CENTSIBLE_LOOP_MODE", "CENTSIBLE_MAX_CONSECUTIVE_ERRORS", "CENTSIBLE_MAX_IDENTICAL_CALLS"):
+            custom_env.pop(k, None)
         if env:
             custom_env.update(env)
         result = subprocess.run(
@@ -132,6 +134,7 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("=== Centsible Status", res.stdout)
         self.assertIn("Loop Guard:     Enabled", res.stdout)
         self.assertIn("Tokens Saved:", res.stdout)
+        self.assertIn("mode normal: 4 identical, 3 errors", res.stdout)
 
     def test_symlinked_bin_execution(self):
         # Verify bin/centsible works when invoked via a symlink in another directory (e.g. ~/.local/bin/centsible)
