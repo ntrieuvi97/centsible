@@ -11,7 +11,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.cli import analyze_transcript, compare_baseline  # noqa: E402
+from core.cli import analyze_transcript, claude_project_dir, compare_baseline  # noqa: E402
 
 
 def use(i, name):
@@ -79,6 +79,12 @@ class TestTranscript(unittest.TestCase):
         r = compare_baseline(self.dir, datetime(2026, 11, 3, tzinfo=timezone.utc))
         self.assertFalse(r["enough_data"])
         self.assertNotIn("saved_tokens_per_session", r)
+
+
+class ProjectDirTest(unittest.TestCase):
+    def test_encodes_cwd_like_claude_code(self):
+        d = claude_project_dir(Path("/Users/a.b/My Repo/x"))
+        self.assertEqual(d.name, "-Users-a-b-My-Repo-x")
 
 
 if __name__ == "__main__":
