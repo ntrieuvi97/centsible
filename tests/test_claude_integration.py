@@ -154,6 +154,30 @@ class TestClaudeIntegration(unittest.TestCase):
         get_state_path(sid).unlink(missing_ok=True)
         get_state_path(sid2).unlink(missing_ok=True)
 
+    def test_claude_stop_hook_nudges_once_after_repeated_failures(self):
+        sid = f"claude_stop_{id(self)}"
+
+        def fail():
+            return json.dumps({
+                "tool_name": "Bash", "tool_input": {"command": "pytest x"},
+                "session_id": sid, "cwd": self.temp_dir.name, "error": "Exit code 1",
+            })
+
+        stop = json.dumps({"session_id": sid, "cwd": self.temp_dir.name})
+        self._run_te(["hook", "claude-post-tool-failure"], fail())
+        # 1 failure < threshold -> no nudge
+        self.assertEqual(json.loads(self._run_te(["hook", "claude-stop"], stop).stdout), {})
+        self._run_te(["hook", "claude-post-tool-failure"], fail())
+        # stop_hook_active -> never loop
+        active = json.dumps({"session_id": sid, "stop_hook_active": True})
+        self.assertEqual(json.loads(self._run_te(["hook", "claude-stop"], active).stdout), {})
+        out = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        self.assertEqual(out["decision"], "block")
+        self.assertIn("facts add", out["reason"])
+        # consumed -> second stop passes
+        self.assertEqual(json.loads(self._run_te(["hook", "claude-stop"], stop).stdout), {})
+        get_state_path(sid).unlink(missing_ok=True)
+
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
         plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         marketplace_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
@@ -162,6 +186,7 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(plugin_manifest["name"], "centsible")
         self.assertIn("./claude-hooks.json", plugin_manifest["hooks"])
         self.assertIn("PostToolUseFailure", hooks_cfg["hooks"])
+        self.assertIn("Stop", hooks_cfg["hooks"])
         self.assertEqual(marketplace_manifest["plugins"][0]["name"], "centsible")
 
         # Execute the exact shell command from claude-hooks.json with CLAUDE_PLUGIN_ROOT set

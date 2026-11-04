@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, find_common_bin
 
+STOP_NUDGE_MIN_FAILURES = 2  # tool failures before the Stop hook asks the agent for gotchas
 RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
 MUTATING_TOOLS = {
     "Edit", "Write", "MultiEdit", "NotebookEdit",
@@ -167,6 +168,7 @@ class LoopGuard:
             "calls_since_failed_cmd": 0,
             "injected_fact_ids": [],
             "interventions": 0,
+            "session_failures": 0,
         }
 
     def _load_state(self) -> Dict[str, Any]:
@@ -309,6 +311,7 @@ class LoopGuard:
 
         if error:
             state["consecutive_errors_count"] = prev_errors + 1
+            state["session_failures"] = state.get("session_failures", 0) + 1
             if cmd:
                 state["last_failed_cmd"] = cmd
                 state["calls_since_failed_cmd"] = 0
@@ -349,6 +352,16 @@ class LoopGuard:
             state["calls_since_failed_cmd"] = state.get("calls_since_failed_cmd", 0) + 1
 
         self._save_state(state)
+
+    def consume_gotcha_nudge(self, min_failures: int = STOP_NUDGE_MIN_FAILURES) -> int:
+        """Failures seen since the last nudge if >= min_failures (then cleared), else 0. Lets the Stop hook nudge once per bout of trouble."""
+        state = self._load_state()
+        failures = state.get("session_failures", 0)
+        if failures < min_failures:
+            return 0
+        state["session_failures"] = 0
+        self._save_state(state)
+        return failures
 
     def reset(self) -> None:
         """Clear state for this conversation."""
