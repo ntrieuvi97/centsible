@@ -1,13 +1,13 @@
 # centsible 🪙⚡
 
-> **Experience-driven cost and token optimization for AI coding agents (Antigravity & Claude Code)**  
+> **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.2.0](https://img.shields.io/badge/Version-0.2.0-orange.svg)](#)
+[![Version: 0.2.9](https://img.shields.io/badge/Version-0.2.9-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero External Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
-[![Dual Runtime: AGY + Claude Code](https://img.shields.io/badge/Runtimes-Antigravity%20%7C%20Claude%20Code-purple.svg)](#)
+[![Multi-Agent Runtime: AGY + Claude Code + OpenClaw](https://img.shields.io/badge/Runtimes-Antigravity%20%7C%20Claude%20Code%20%7C%20OpenClaw-purple.svg)](#)
 
 ---
 
@@ -22,19 +22,24 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
 
 ## 💡 How Centsible Solves It
 
-`centsible` operates as a lightweight, zero-dependency controller sharing a single source of truth (`.agents/facts.jsonl` & `.agents/metrics.json`) across both **Google Antigravity** and **Claude Code**:
+`centsible` operates as a lightweight, zero-dependency controller sharing a single source of truth (`.agents/facts.jsonl` & `.agents/metrics.json`) across **Google Antigravity**, **Claude Code**, and **OpenClaw**:
 
-* 🧩 **Zero-Bloat Micro-Skills (Prompt + Pre-Tool Catch):**
+* 🧩 **Zero-Bloat Micro-Skills & Gotchas (Prompt + Pre-Tool Catch):**
   Learns concise, 1-line repository facts with regex triggers (or `pattern="*"` for always-on core facts).
   - **Turn-Start Ephemeral Injection:** When a user prompt matches a trigger (including NFC-normalized & accent-insensitive Vietnamese/multilingual prompts like `"kiểm thử"` ↔ `"kiem thu"`), the fact is injected ephemerally for *that turn only* (`PreInvocation` in Antigravity / `UserPromptSubmit` in Claude Code) without polluting future turns or breaking prompt cache prefixes.
-  - **Mid-Turn PreToolUse Safety Net:** If a user prompt says *"Fix the bug"* (without mentioning a tool name) and the agent attempts to run a command missing a required flag prescribed by a fact (e.g. running `bruno` without `--condense`), `PreToolUse` catches it and reminds the agent before execution.
-* 🧠 **Auto-Learn from Error Recovery:**
-  Monitors `PostToolUse` (success) and `PostToolUseFailure` (Claude Code only reports failed tools there) outcomes. When a CLI command fails (`pytest tests/`) and the subsequent command using the same tool succeeds with adjusted flags or runner prefix (`python3 -m pytest tests/ -q`), `centsible` automatically extracts and stores an `auto-learned` micro-fact. The tool is detected through wrappers and compound commands (`cd app && rtk proxy pytest`), and the failure is remembered for up to 10 tool calls so a Read/Edit between the failure and the retry does not break the match.
-* 🛡️ **Normalized Loop Guard & Circuit Breaker:**
-  Monitors tool invocations with CLI flag & metadata normalization (stripping cosmetic retries like `-v`, `-q`, `--tb=short`, or `toolSummary` changes) and deep error extraction (`exitCode`, `is_error`, shell exit markers). If an identical command is issued 3 times or 2 consecutive failures occur, it halts execution:
-  - In **Antigravity**: prompts confirmation via decision `"ask"`.
-  - In **Claude Code**: blocks the action immediately with exit code `2`.
-  - Pick a strictness **mode** from the CLI or the `/centsible-config` slash command: `centsible config mode ultra|normal|weak` (stored in `~/.centsible/config.json`, or `$CENTSIBLE_HOME/config.json`; env `CENTSIBLE_LOOP_MODE` overrides it):
+  - **Mid-Turn PreToolUse Safety Net (CLI & File Paths):** If a user prompt says *"Fix the bug"* (without mentioning a tool name) and the agent attempts to run a command missing a required flag prescribed by a fact (e.g. running `bruno` without `--condense`), or touches a file governed by an architectural rule (`category: gotcha` or `category: rule`), `PreToolUse` catches it and reminds the agent before execution.
+  - **User-Correction Auto-Learn & Capture Nudge:** When a user corrects the agent (*"không phải...", "đừng sửa file X", "never touch Y", "always use Z"*), Centsible extracts technical identifiers (filenames, modules, CLI binaries) and automatically persists or nudges the agent to save the gotcha.
+* 🧠 **Auto-Learn from Error Recovery & Session Troubleshooting:**
+  - **CLI & Script Recovery:** Monitors `PostToolUse` (success) and `PostToolUseFailure` (Claude Code). When a command fails (`pytest tests/`) and the subsequent command using the same tool or interpreter script (`node scripts/migrate.js`, `python3 test.py`) succeeds with adjusted flags or runner prefix (`python3 -m pytest tests/ -q`), `centsible` automatically extracts and stores an `auto-learned` micro-fact. The tool is detected through wrappers (`cd app && rtk proxy pytest`), and failures are remembered for up to 10 tool calls.
+  - **Claude Code Stop Hook Nudge:** If an agent encounters repeated tool failures (≥2) in a session, the `Stop` hook intercepts termination once to prompt the agent to persist any discovered gotchas (`centsible facts add --pattern "<target>" --fact "<rule>" --category gotcha`), ensuring hard-won discoveries are not lost when the session ends.
+* 🛡️ **Normalized Loop Guard & Circuit Breaker (Multi-Agent):**
+  Monitors tool invocations across Antigravity, Claude Code, and OpenClaw (`exec`, `bash`, `run_command`, `edit_file`, `write_file`, `apply_patch`), normalizing cosmetic variations:
+  - Strips cosmetic CLI flags (`-v`, `-q`, `--tb=short`, `--no-header`).
+  - Strips volatile tool parameters (`WaitMsBeforeAsync`, `timeout`, `toolSummary`, `yieldMs`, `workdir`, `pty`, `background`, `IsDaemon`).
+  - Halts runaway loops if an identical command is issued repeatedly or consecutive errors occur:
+    - In **Antigravity**: prompts confirmation via decision `"ask"`.
+    - In **Claude Code**: blocks the action immediately with exit code `2`.
+  - Configurable strictness presets via `centsible config mode` or slash command `/centsible-config`:
 
     | Mode | Consecutive errors | Identical calls |
     |------|--------------------|-----------------|
@@ -42,11 +47,11 @@ AI coding agents often burn thousands of unnecessary tokens due to 3 common patt
     | `normal` (default) | 3 | 4 |
     | `weak` (tolerant) | 4 | 5 |
 
-  - Fine-tune with `centsible config set <key> <n>` / `unset <key>`; numeric values override the mode. Or via env vars (these override `config.json`) `CENTSIBLE_LOOP_MODE`, `CENTSIBLE_MAX_IDENTICAL_CALLS` and `CENTSIBLE_MAX_CONSECUTIVE_ERRORS`; e.g. `"env": {"CENTSIBLE_MAX_CONSECUTIVE_ERRORS": "4"}` in `~/.claude/settings.json`. Invalid values are ignored.
+  - Fine-tune via `centsible config set <key> <n>` or environment variables (`CENTSIBLE_LOOP_MODE`, `CENTSIBLE_MAX_IDENTICAL_CALLS`, `CENTSIBLE_MAX_CONSECUTIVE_ERRORS`).
 * 📊 **Real-Time Token ROI & Session Transcript Analytics:**
   Tracks exact ephemeral token overhead vs. discovery and loop-intervention tokens saved, converting net savings into cents (`¢`) / USD (`$`), ROI multiplier, First-Try Command Success Rate (%), and offline JSONL session transcript diagnostics (`centsible stats --transcript`).
 * 🤝 **Shared Knowledge & Zero External Dependencies:**
-  100% Python standard library with instant startup (`<15ms`), shared seamlessly between Antigravity and Claude Code.
+  100% Python standard library with instant startup (`<15ms`), shared seamlessly across all supported agents.
 
 ---
 
@@ -119,31 +124,51 @@ Output (`centsible stats --transcript transcript.jsonl`):
 • Retry Streaks:        0 streaks (0 wasted retry calls)
 ```
 
-### 2. Add a Micro-Fact
+### 2. Configure Loop Guard Strictness
+Manage circuit breaker thresholds and presets:
 ```bash
-centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_fact>"
+# View active configuration and effective thresholds
+centsible config list
+
+# Switch loop guard mode preset (ultra: 2 err / 3 calls, normal: 3 err / 4 calls, weak: 4 err / 5 calls)
+centsible config mode ultra
+centsible config mode normal
+
+# Override specific thresholds
+centsible config set max_consecutive_errors 4
+centsible config set max_identical_calls 5
+centsible config unset max_consecutive_errors
+```
+*(In Claude Code, you can also run the slash command `/centsible-config mode ultra`)*
+
+### 3. Add a Micro-Fact or Architectural Gotcha
+```bash
+centsible facts add --pattern "<regex_or_keyword>" --fact "<one_line_fact>" [--category gotcha|rule|general]
 ```
 Examples:
 ```bash
-# Example 1: Bruno test command
+# Example 1: CLI command optimization
 centsible facts add --pattern "bruno|run-bruno" --fact "Append --condense to Bruno commands on UAT to save 80% JSON tokens."
 
-# Example 2: Test runner
+# Example 2: Test runner flags
 centsible facts add --pattern "pytest|unit-test" --fact "Run unit tests with 'pytest tests/ -q --tb=short' instead of full suite."
+
+# Example 3: Architectural / File gotcha (triggers in PreToolUse when editing matching paths)
+centsible facts add --pattern "auth_service.py|auth/" --fact "Never mutate token signing keys directly; use TokenKeyRotator." --category gotcha
 ```
 
-### 3. List Stored Facts
+### 4. List Stored Facts
 ```bash
 centsible facts list
 ```
 
-### 4. Test Prompt Matching
+### 5. Test Prompt Matching
 Check what facts trigger for a specific user prompt without executing:
 ```bash
 centsible facts test "Can you run bruno tests for me?"
 ```
 
-### 5. Remove Stale Fact
+### 6. Remove Stale Fact
 ```bash
 centsible facts remove <id_or_pattern>
 ```
@@ -153,35 +178,37 @@ centsible facts remove <id_or_pattern>
 ## 🏗️ Architecture
 
 ```text
-User Prompt: "Run bruno test" (or "Chay kiem thu bruno")
+User Prompt: "Run bruno test" (or user correction "Đừng sửa auth_service.py trực tiếp")
       │
       ▼
 [ PreInvocation / UserPromptSubmit Hook ]
       │
       ├──> centsible hook (NFC + accent-insensitive regex matcher)
-      │      └─ Matches "bruno" pattern & records injected fact IDs
-      │      └─ Returns ephemeral injection for this turn only
+      │      ├─ Matches prompt pattern & returns ephemeral injection for this turn only
+      │      └─ Detects user corrections & auto-saves gotcha rule / capture nudge
       ▼
 [ Model Execution Turn ]
       │
-      ├──> Tool Call Attempt (e.g. run_command: bruno run uat)
+      ├──> Tool Call Attempt (run_command, exec, edit_file, write_file, ...)
       │      │
       │      ▼
-      │   [ PreToolUse Hook: Loop Guard + Missing-Flag Fact Check ]
-      │      ├─ Normalizes command (strips -v/-q/toolSummary variance)
-      │      ├─ Checks identical call count (>=3) & consecutive errors (>=2)
-      │      ├─ Checks uninjected facts for missing required flags (--condense)
+      │   [ PreToolUse Hook: Loop Guard + Missing Flags & File Gotchas ]
+      │      ├─ Normalizes command & strips volatile args (WaitMsBeforeAsync, timeout, workdir)
+      │      ├─ Checks identical calls (>=3..5) & consecutive errors (>=2..4)
+      │      ├─ Checks CLI commands for missing required flags (--condense)
+      │      ├─ Checks file editing/reading paths against architectural gotchas & rules
       │      └─ Decision: "allow" or "ask"/exit(2) with corrective hint
       │      │
       │      ▼
-      │   [ PostToolUse Hook: Telemetry & Auto-Learn Recovery ]
+      │   [ PostToolUse / PostToolUseFailure Hook: Telemetry & Auto-Learn ]
       │      ├─ Extracts exit codes / errors & updates 1st-try success metrics
-      │      └─ If failed_cmd -> succeeded_cmd on same binary: auto-learns fact!
+      │      └─ If failed -> succeeded on same binary/script: auto-learns micro-fact!
       ▼
-[ Next Turn: "Fix utils.py" ]
+[ Turn Completion / Session Exit ]
       │
       ▼
-Prompt has NO bruno fact! Context & Prompt Cache remain 100% clean!
+   [ Stop Hook (Claude Code) ]
+      └─ If session experienced repeated failures (>=2), nudges agent to save gotchas
 ```
 
 ---
@@ -198,7 +225,7 @@ python3 -m unittest discover tests
 ## 🙏 Acknowledgments
 
 * Inspired by the cost control philosophy and research behind [Microsoft Research's TokenEconomizer](https://github.com/microsoft/TokenEconomizer).
-* Built natively for the Google Antigravity and Claude Code developer communities.
+* Built natively for the Google Antigravity, Claude Code, and OpenClaw developer communities.
 
 ---
 

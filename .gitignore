@@ -18,3 +18,7 @@ Thumbs.db
 .venv/
 venv/
 env/
+
+# Test & package manager caches
+.dsh-e2e/
+.pnpm-store/
