@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.3.1](https://img.shields.io/badge/Version-0.3.1-orange.svg)](#)
+[![Version: 0.3.2](https://img.shields.io/badge/Version-0.3.2-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -18,7 +18,7 @@ AI agents burn thousands of tokens rediscovering repo facts, repeating failing c
 | Feature | What It Does | Benefit |
 |---|---|---|
 | 🧩 **Ephemeral Micro-Skills** | Injects 1-line repo facts only when prompted or when missing required flags/paths. | Zero context bloat, prompt cache stays 100% intact. |
-| 🧠 **Self-Learning Gotchas** | Auto-learns from fixed command retries, script errors (`node`, `python3`), and user corrections. | No repetitive troubleshooting across sessions. |
+| 🧠 **Autonomous Self-Learning** | Auto-learns from recoveries and user corrections; one-shot wrap-up reflection nudges agent to persist gotchas automatically. | Zero-maintenance continuous repo memory across sessions. |
 | 🛡️ **Normalized Loop Guard** | Halts infinite retry loops and duplicate tool calls across AGY, Claude Code, and OpenClaw. | Saves context budget, prevents runaway costs. |
 | 📊 **Token ROI Telemetry** | Real-time dollar & token savings metrics and offline session transcript diagnostics. | Immediate visibility into cost efficiency. |
 
@@ -58,8 +58,9 @@ centsible facts remove <id_or_pattern>
 centsible harvest [--prompt] [--force]
 # Or in Claude Code chat: /centsible-harvest
 
-# Configure loop guard thresholds (modes: ultra | normal | weak)
+# Configure loop guard & end-of-session reflection
 centsible config mode ultra
+centsible config reflect on          # on (default) | off (disable wrap-up reflection nudge)
 centsible config list
 centsible config set max_consecutive_errors 4
 ```
@@ -91,7 +92,7 @@ centsible config set max_consecutive_errors 4
 1. User Prompt     ──► [Prompt Hook]    ──► Injects matching fact ephemerally (turn-only)
 2. Tool Execution  ──► [PreTool Hook]   ──► Loop Guard + validates CLI flags & file gotchas
 3. Tool Outcome    ──► [PostTool Hook]  ──► Telemetry + auto-learns successful recoveries
-4. Session End     ──► [Stop Hook]      ──► Nudges agent to save hard-won gotchas
+4. Session End     ──► [Stop Hook]      ──► One-shot wrap-up reflection nudges agent to save hard-won gotchas
 ```
 
 ---

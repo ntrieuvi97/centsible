@@ -30,6 +30,13 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./bin/centsible hook stop",
+        "timeout": 5
+      }
     ]
   }
 }

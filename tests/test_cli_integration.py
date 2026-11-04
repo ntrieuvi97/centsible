@@ -11,6 +11,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from core.loop_guard import get_state_path
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -59,6 +61,33 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("max_consecutive_errors = 4", res.stdout)
         self.assertNotEqual(self._run_te(["config", "mode", "bogus"], env=env).returncode, 0)
         self.assertIn("mode = normal", self._run_te(["config", "unset", "mode"], env=env).stdout)
+
+    def test_config_reflect_cli(self):
+        env = {"CENTSIBLE_HOME": self.temp_dir.name, "CENTSIBLE_REFLECT": "", "CENTSIBLE_AUTO_LEARN_NUDGE": ""}
+        # 1. Default reflect is on
+        res = self._run_te(["config", "reflect"], env=env)
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("reflect = on", res.stdout)
+        self.assertEqual(self._run_te(["config", "get", "reflect"], env=env).stdout.strip(), "on")
+
+        # 2. Set reflect off
+        res_off = self._run_te(["config", "reflect", "off"], env=env)
+        self.assertEqual(res_off.returncode, 0)
+        self.assertIn("reflect = off", res_off.stdout)
+        self.assertEqual(self._run_te(["config", "get", "reflect"], env=env).stdout.strip(), "off")
+
+        # 3. Invalid choice rejected
+        self.assertNotEqual(self._run_te(["config", "reflect", "maybe"], env=env).returncode, 0)
+
+        # 4. Unset reflect reverts to on
+        res_unset = self._run_te(["config", "unset", "reflect"], env=env)
+        self.assertEqual(res_unset.returncode, 0)
+        self.assertIn("reflect = on", res_unset.stdout)
+
+        # 5. Overridden by env var
+        env_override = dict(env, CENTSIBLE_REFLECT="off")
+        res_env = self._run_te(["config", "list"], env=env_override)
+        self.assertIn("reflect = off (overridden by env CENTSIBLE_REFLECT)", res_env.stdout)
 
     def test_facts_crud_cli(self):
         # 1. Add fact
@@ -236,6 +265,64 @@ class TestCliIntegration(unittest.TestCase):
         res_force = self._run_te(["harvest", "--force"])
         self.assertEqual(res_force.returncode, 0)
         self.assertIn("To harvest 5-8 golden architectural facts", res_force.stdout)
+
+    def test_antigravity_stop_hook_self_learning(self):
+        cid = f"agy_stop_{id(self)}"
+
+        def post_tool(tool_name, cmd=None):
+            payload = {
+                "conversationId": cid,
+                "workspacePaths": [self.temp_dir.name],
+                "toolCall": {"name": tool_name, "args": {"CommandLine": cmd} if cmd else {}},
+            }
+            return self._run_te(["hook", "post-tool"], json.dumps(payload))
+
+        def stop_hook(term_reason="NO_TOOL_CALL", env=None):
+            payload = {
+                "conversationId": cid,
+                "workspacePaths": [self.temp_dir.name],
+                "terminationReason": term_reason,
+            }
+            return self._run_te(["hook", "stop"], json.dumps(payload), env=env)
+
+        # 1. No tool calls yet -> stop hook returns empty {}
+        res = stop_hook()
+        self.assertEqual(json.loads(res.stdout), {})
+
+        # 2. Mutating tool executed (e.g. edit_file)
+        post_tool("edit_file")
+
+        # Non-clean termination (USER_CANCELED or ERROR) must never block
+        self.assertEqual(json.loads(stop_hook("USER_CANCELED").stdout), {})
+        self.assertEqual(json.loads(stop_hook("ERROR").stdout), {})
+
+        # Clean termination NO_TOOL_CALL -> nudges agent to self-learn
+        res_stop = stop_hook("NO_TOOL_CALL")
+        out = json.loads(res_stop.stdout)
+        self.assertEqual(out.get("decision"), "continue")
+        self.assertIn("facts add", out.get("reason", ""))
+
+        # 3. Second stop call in same session is consumed (one-shot guarantee)
+        res_stop_again = stop_hook("NO_TOOL_CALL")
+        self.assertEqual(json.loads(res_stop_again.stdout), {})
+
+        # 4. Test when CENTSIBLE_AUTO_LEARN_NUDGE=0 disables wrapup nudge
+        cid_off = f"agy_stop_off_{id(self)}"
+        post_payload = {
+            "conversationId": cid_off,
+            "workspacePaths": [self.temp_dir.name],
+            "toolCall": {"name": "edit_file", "args": {}},
+        }
+        self._run_te(["hook", "post-tool"], json.dumps(post_payload))
+        res_off = self._run_te(
+            ["hook", "stop"],
+            json.dumps({"conversationId": cid_off, "terminationReason": "NO_TOOL_CALL"}),
+            env={"CENTSIBLE_AUTO_LEARN_NUDGE": "0"},
+        )
+        self.assertEqual(json.loads(res_off.stdout), {})
+
+        get_state_path(cid).unlink(missing_ok=True)
+        get_state_path(cid_off).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

@@ -20,15 +20,19 @@ if str(REPO_ROOT) not in sys.path:
 from core import __version__
 from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, estimate_tokens, get_default_facts_path
 from core.loop_guard import (
+    AUTO_LEARN_ENV,
     CONFIG_KEYS,
     MODE_ENV,
     MODES,
     MUTATING_TOOLS,
+    REFLECT_CHOICES,
+    REFLECT_ENV,
     LoopGuard,
     extract_error_from_payload,
     get_config_path,
     load_config,
     resolve_mode,
+    resolve_reflect,
     resolve_threshold,
     save_config,
 )
@@ -450,10 +454,44 @@ def handle_hook_claude_post_tool(failed: bool = False) -> None:
     sys.stdout.flush()
 
 
+def handle_hook_stop() -> None:
+    """
+    Antigravity Hook: Stop.
+    When the turn completes normally, check if the session uncovered gotchas or new patterns,
+    and nudge the agent once to persist them via facts add before closing.
+    """
+    try:
+        raw_input = sys.stdin.read()
+        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
+    except Exception:
+        payload = {}
+
+    termination_reason = payload.get("terminationReason", "NO_TOOL_CALL")
+    # Only nudge on clean/normal completions (NO_TOOL_CALL). Never block user cancellation, limits, or errors.
+    if termination_reason != "NO_TOOL_CALL":
+        sys.stdout.write(json.dumps({}, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+        return
+
+    conversation_id = payload.get("conversationId", "default")
+    guard = LoopGuard(conversation_id)
+    nudge_msg = guard.consume_wrapup_nudge()
+
+    output: Dict[str, Any] = {}
+    if nudge_msg:
+        output = {
+            "decision": "continue",
+            "reason": nudge_msg,
+        }
+
+    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
 def handle_hook_claude_stop() -> None:
     """
-    Claude Code Hook: Stop. If the agent hit repeated tool failures this session, block the stop once
-    so it can persist any gotcha it discovered (the user-prompt nudge never fires for agent-found gotchas).
+    Claude Code Hook: Stop. If the agent hit repeated tool failures or completed significant activity this session,
+    block the stop once so it can persist any gotchas or golden facts discovered.
     """
     try:
         raw_input = sys.stdin.read()
@@ -464,16 +502,12 @@ def handle_hook_claude_stop() -> None:
     output: Dict[str, Any] = {}
     # stop_hook_active: we already forced a continuation this stop cycle; never loop.
     if not payload.get("stop_hook_active"):
-        failures = LoopGuard(payload.get("session_id", "default")).consume_gotcha_nudge()
-        if failures:
+        guard = LoopGuard(payload.get("session_id", "default"))
+        nudge_msg = guard.consume_wrapup_nudge()
+        if nudge_msg:
             output = {
                 "decision": "block",
-                "reason": (
-                    f"[Centsible] {failures} tool failures this session. If you found a non-obvious gotcha "
-                    "(file/CLI quirk, wrong flag, rule a future session would trip on), save it: "
-                    "`centsible facts add --pattern \"<file|tool>\" --fact \"<one-line rule>\" --category gotcha`. "
-                    "If nothing is worth keeping, just say so and finish."
-                ),
+                "reason": nudge_msg,
             }
 
     sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
@@ -494,6 +528,7 @@ def main() -> int:
     hook_sub.add_parser("pre-invocation", help="Antigravity PreInvocation hook")
     hook_sub.add_parser("pre-tool", help="Antigravity PreToolUse hook")
     hook_sub.add_parser("post-tool", help="Antigravity PostToolUse hook")
+    hook_sub.add_parser("stop", help="Antigravity Stop hook")
 
     # Claude Code hooks
     hook_sub.add_parser("claude-prompt", help="Claude Code UserPromptSubmit hook")
@@ -546,13 +581,15 @@ def main() -> int:
     config_sub.add_parser("list", help="Show effective mode and thresholds")
     config_mode = config_sub.add_parser("mode", help="Show or set the loop guard mode preset")
     config_mode.add_argument("name", nargs="?", choices=sorted(MODES), help="ultra (strict), normal, weak (tolerant)")
-    config_get = config_sub.add_parser("get", help="Show one effective threshold")
-    config_get.add_argument("key", choices=sorted(CONFIG_KEYS))
+    config_reflect = config_sub.add_parser("reflect", help="Show or set end-of-session reflection nudge (on | off)")
+    config_reflect.add_argument("state", nargs="?", choices=REFLECT_CHOICES, help="on (nudge agent on session wrap-up, default), off (silent)")
+    config_get = config_sub.add_parser("get", help="Show one effective threshold or setting")
+    config_get.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect"])
     config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")
     config_set.add_argument("key", choices=sorted(CONFIG_KEYS))
     config_set.add_argument("value", type=int)
-    config_unset = config_sub.add_parser("unset", help="Remove a threshold (back to default)")
-    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode"])
+    config_unset = config_sub.add_parser("unset", help="Remove a setting or threshold (back to default)")
+    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect"])
 
     args = parser.parse_args()
 
@@ -567,6 +604,9 @@ def main() -> int:
             return 0
         elif args.hook_type == "post-tool":
             handle_hook_post_tool()
+            return 0
+        elif args.hook_type == "stop":
+            handle_hook_stop()
             return 0
         elif args.hook_type == "claude-prompt":
             handle_hook_claude_prompt()
@@ -592,6 +632,17 @@ def main() -> int:
         if args.config_action == "mode" and args.name:
             cfg["mode"] = args.name
             save_config(cfg)
+        elif args.config_action == "reflect" and getattr(args, "state", None):
+            cfg["reflect"] = args.state
+            save_config(cfg)
+        elif args.config_action == "get":
+            if args.key == "mode":
+                print(resolve_mode())
+            elif args.key == "reflect":
+                print(resolve_reflect())
+            else:
+                print(resolve_threshold(args.key))
+            return 0
         elif args.config_action == "set":
             if args.value < 1:
                 print("✗ value must be >= 1")
@@ -600,9 +651,20 @@ def main() -> int:
             save_config(cfg)
         elif args.config_action == "unset":
             cfg.pop(args.key, None)
+            if args.key == "reflect":
+                cfg.pop("auto_learn_nudge", None)
             save_config(cfg)
-        note = f" (overridden by env {MODE_ENV})" if os.environ.get(MODE_ENV) in MODES else ""
-        print(f"mode = {resolve_mode()}{note}")
+
+        note_mode = f" (overridden by env {MODE_ENV})" if os.environ.get(MODE_ENV) in MODES else ""
+        print(f"mode = {resolve_mode()}{note_mode}")
+        env_ref_name = None
+        for k in (REFLECT_ENV, AUTO_LEARN_ENV):
+            v = os.environ.get(k)
+            if v and v.strip():
+                env_ref_name = k
+                break
+        note_reflect = f" (overridden by env {env_ref_name})" if env_ref_name else ""
+        print(f"reflect = {resolve_reflect()}{note_reflect}")
         for key in sorted(CONFIG_KEYS):
             env_name = CONFIG_KEYS[key]
             note = f" (overridden by env {env_name})" if os.environ.get(env_name) else ""

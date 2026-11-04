@@ -26,15 +26,18 @@ class TestClaudeIntegration(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _run_te(self, args, stdin_data=None):
+    def _run_te(self, args, stdin_data=None, env=None):
         cmd = [sys.executable, str(REPO_ROOT / "core" / "cli.py")] + args
+        custom_env = {k: v for k, v in subprocess.os.environ.items() if not k.startswith("CENTSIBLE_")} | {"CENTSIBLE_HOME": self.temp_dir.name}
+        if env:
+            custom_env.update(env)
         return subprocess.run(
             cmd,
             input=stdin_data,
             capture_output=True,
             text=True,
             cwd=self.temp_dir.name,
-            env={k: v for k, v in subprocess.os.environ.items() if not k.startswith("CENTSIBLE_")} | {"CENTSIBLE_HOME": self.temp_dir.name},
+            env=custom_env,
         )
 
     def test_claude_prompt_hook_injects_additional_context(self):
@@ -178,6 +181,40 @@ class TestClaudeIntegration(unittest.TestCase):
         # consumed -> second stop passes
         self.assertEqual(json.loads(self._run_te(["hook", "claude-stop"], stop).stdout), {})
         get_state_path(sid).unlink(missing_ok=True)
+
+    def test_claude_stop_hook_nudges_after_mutations(self):
+        sid = f"claude_mutate_{id(self)}"
+        edit_payload = json.dumps({
+            "tool_name": "Edit", "tool_input": {"file_path": "main.py"},
+            "session_id": sid, "cwd": self.temp_dir.name,
+        })
+        stop = json.dumps({"session_id": sid, "cwd": self.temp_dir.name})
+
+        # Post edit tool use
+        self._run_te(["hook", "claude-post-tool"], edit_payload)
+
+        # Stop hook blocks once with wrap-up nudge
+        out = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        self.assertEqual(out.get("decision"), "block")
+        self.assertIn("facts add", out.get("reason", ""))
+
+        # Second call allows stop (one-shot)
+        out2 = json.loads(self._run_te(["hook", "claude-stop"], stop).stdout)
+        self.assertEqual(out2, {})
+
+        # When reflect is off, Stop hook does not block on mutations
+        sid_off = f"claude_off_{id(self)}"
+        edit_off = json.dumps({
+            "tool_name": "Edit", "tool_input": {"file_path": "main.py"},
+            "session_id": sid_off, "cwd": self.temp_dir.name,
+        })
+        stop_off = json.dumps({"session_id": sid_off, "cwd": self.temp_dir.name})
+        self._run_te(["hook", "claude-post-tool"], edit_off)
+        out_off = json.loads(self._run_te(["hook", "claude-stop"], stop_off, env={"CENTSIBLE_REFLECT": "off"}).stdout)
+        self.assertEqual(out_off, {})
+
+        get_state_path(sid).unlink(missing_ok=True)
+        get_state_path(sid_off).unlink(missing_ok=True)
 
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
         plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
