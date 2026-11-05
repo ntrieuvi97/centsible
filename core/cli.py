@@ -385,7 +385,10 @@ def handle_hook_pre_tool() -> None:
 
     engine = _engine(get_default_facts_path(workspace_paths))
     guard = LoopGuard(conversation_id)
-    decision, reason = guard.check_pre_tool_use(tool_call, engine=engine, block_hints=True)
+    # Hosts that can attach the hint to the tool result (OpenClaw bridge) send blockHints=false, so a hint never
+    # stops a command; hosts that cannot (Antigravity) keep the default and get 'ask'.
+    block_hints = payload.get("blockHints", True) is not False
+    decision, reason = guard.check_pre_tool_use(tool_call, engine=engine, block_hints=block_hints)
 
     response: Dict[str, Any] = {"decision": decision}
     if reason:

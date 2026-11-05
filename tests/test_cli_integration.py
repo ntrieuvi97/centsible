@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from core.loop_guard import get_state_path
@@ -155,6 +156,38 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(len(data["injectSteps"]), 1)
         self.assertIn("ephemeralMessage", data["injectSteps"][0])
         self.assertIn("Use --compact flag on staging", data["injectSteps"][0]["ephemeralMessage"])
+
+    def _pre_tool(self, conversation_id, **extra):
+        payload = {
+            "toolCall": {"name": "exec", "args": {"command": "bruno run staging"}},
+            "conversationId": conversation_id,
+            "workspacePaths": [self.temp_dir.name],
+            **extra,
+        }
+        res = self._run_te(["hook", "pre-tool"], stdin_data=json.dumps(payload))
+        self.assertEqual(res.returncode, 0)
+        return json.loads(res.stdout)
+
+    def test_pre_tool_hint_blocks_by_default_but_not_when_host_can_attach_it(self):
+        self._run_te([
+            "facts", "add", "--pattern", "bruno.{0,30}(run|staging)",
+            "--fact", "Append --compact to bruno commands", "--category", "tool", "--id", "f-bruno",
+        ])
+        run_id = uuid.uuid4().hex  # guard state outlives the temp dir, so ids must be unique per run
+        blocking = self._pre_tool(f"hint_default_{run_id}")
+        self.assertEqual(blocking["decision"], "ask")  # Antigravity cannot inject context, so it shows the hint by asking
+        self.assertIn("--compact", blocking["reason"])
+
+        attached = self._pre_tool(f"hint_non_blocking_{run_id}", blockHints=False)
+        self.assertEqual(attached["decision"], "allow")
+        self.assertIn("--compact", attached["reason"])
+
+    def test_pre_tool_loop_guard_still_blocks_when_hints_are_non_blocking(self):
+        loop_id = f"loop_non_blocking_{uuid.uuid4().hex}"
+        for _ in range(4):  # default limit: 4 identical calls
+            res = self._pre_tool(loop_id, blockHints=False)
+        self.assertEqual(res["decision"], "ask")
+        self.assertIn("LoopGuard", res["reason"])
 
     def test_pre_invocation_no_match_returns_empty(self):
         payload = {

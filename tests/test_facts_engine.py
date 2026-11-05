@@ -340,6 +340,38 @@ class TestGlobalFacts(unittest.TestCase):
         self.assertNotIn("abcdef123", gotcha["fact"])
 
 
+class TestCompliantCommandSkipsHint(unittest.TestCase):
+    FACT = ("Trong repo này 'python3 -m pytest' qua rtk có lúc báo 'Failed to spawn process'; "
+            "chạy 'rtk proxy python3 -m pytest tests -q' để chạy ổn định.")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine = FactsEngine(Path(self.tmp.name) / "facts.jsonl")
+        self.engine.add_fact("pytest", self.FACT, category="gotcha", fact_id="g", force=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _hints(self, command):
+        return self.engine.match_tool_call({"name": "exec", "args": {"command": command}}, record_hits=False)
+
+    def test_command_that_already_follows_the_fact_gets_no_hint(self):
+        self.assertEqual(self._hints("rtk proxy python3 -m pytest tests -q"), [])
+        self.assertEqual(self._hints("cd repo && rtk proxy python3 -m pytest tests/unit -q --tb=short"), [])
+
+    def test_command_that_ignores_the_fact_still_gets_the_hint(self):
+        self.assertEqual(len(self._hints("python3 -m pytest tests -q")), 1)
+        self.assertEqual(len(self._hints("pytest")), 1)
+
+    def test_compliant_hit_is_not_recorded_as_a_saving(self):
+        self.engine.match_tool_call({"name": "exec", "args": {"command": "rtk proxy python3 -m pytest tests -q"}})
+        self.assertEqual(self.engine.get_fact("g")["hits"], 0)
+
+    def test_gotcha_without_a_quoted_command_keeps_firing(self):
+        self.engine.add_fact("cli.py", "Keep the exit codes stable", category="gotcha", fact_id="r")
+        self.assertEqual([f["id"] for f in self._hints("sed -i s/a/b/ core/cli.py")], ["r"])
+
+
 class TestPatternSpecificity(unittest.TestCase):
     """Saved facts are injected into prompts, so a pattern must describe the situation, not one keyword."""
 
