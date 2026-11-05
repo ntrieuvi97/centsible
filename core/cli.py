@@ -19,7 +19,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, debug_warn, derive_summary, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
+from core.facts_engine import (
+    DEFAULT_USD_PER_MTOK,
+    TOOL_CATEGORIES,
+    FactsEngine,
+    debug_warn,
+    derive_summary,
+    detect_user_correction,
+    estimate_tokens,
+    get_default_facts_path,
+    get_global_facts_path,
+)
 from core.loop_guard import (
     AUTO_LEARN_ENV,
     CONFIG_KEYS,
@@ -36,6 +46,7 @@ from core.loop_guard import (
     load_config,
     normalize_reflect_mode,
     resolve_inject_mode,
+    resolve_max_prompt_facts,
     resolve_mode,
     resolve_reflect,
     resolve_threshold,
@@ -317,6 +328,15 @@ def handle_hook_pre_invocation() -> None:
             matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         else:
             matched = []
+    elif inject_mode == "smart":
+        # Smart Hybrid: inject top domain & gotcha facts into prompt (capped at max_prompt_facts)
+        # Defer pure CLI tool syntax facts to PreToolUse Just-in-Time!
+        matched = engine.match(
+            user_input,
+            record_hits=True,
+            max_facts=resolve_max_prompt_facts(),
+            exclude_categories=TOOL_CATEGORIES,
+        )
     else:
         matched = engine.match(user_input, record_hits=True)
 
@@ -419,6 +439,15 @@ def handle_hook_claude_prompt() -> None:
             matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         else:
             matched = []
+    elif inject_mode == "smart":
+        # Smart Hybrid: inject top domain & gotcha facts into prompt (capped at max_prompt_facts)
+        # Defer pure CLI tool syntax facts to PreToolUse Just-in-Time!
+        matched = engine.match(
+            user_prompt,
+            record_hits=True,
+            max_facts=resolve_max_prompt_facts(),
+            exclude_categories=TOOL_CATEGORIES,
+        )
     else:
         matched = engine.match(user_prompt, record_hits=True)
 
@@ -644,8 +673,8 @@ def main() -> int:
     config_mode.add_argument("name", nargs="?", choices=sorted(MODES), help="ultra (strict), normal, weak (tolerant)")
     config_reflect = config_sub.add_parser("reflect", help="Show or set reflection mode (inline | hook | off)")
     config_reflect.add_argument("state", nargs="?", choices=REFLECT_CHOICES, help="inline (recommended: in-turn capture, zero extra turns), hook (blocking stop hook), off")
-    config_inject = config_sub.add_parser("inject", help="Show or set fact injection strategy (jit | eager | off)")
-    config_inject.add_argument("mode", nargs="?", choices=INJECT_CHOICES, help="jit (Just-in-Time Pre-Tool Hints, saves prompt tokens), eager (all matching facts in prompt), off")
+    config_inject = config_sub.add_parser("inject", help="Show or set fact injection strategy (smart | jit | eager | off)")
+    config_inject.add_argument("mode", nargs="?", choices=INJECT_CHOICES, help="smart (Smart Hybrid: top domain facts in prompt, tool syntax in PreToolUse), jit (strict JIT), eager, off")
     config_get = config_sub.add_parser("get", help="Show one effective threshold or setting")
     config_get.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect", "inject", "inject_mode"])
     config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")

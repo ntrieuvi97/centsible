@@ -66,19 +66,34 @@ REFLECT_MODES = {
 REFLECT_CHOICES = ["inline", "hook", "off", "on"]
 
 INJECT_ENV = "CENTSIBLE_INJECT_MODE"
-DEFAULT_INJECT_MODE = "jit"
+DEFAULT_INJECT_MODE = "smart"
 INJECT_MODES = {
-    "jit": "Just-In-Time Pre-Tool Hints (recommended): inject facts only right before the relevant tool runs, eliminating prompt token waste.",
-    "eager": "Eager Prompt Injection: matches user prompts and injects facts upfront at turn start.",
+    "smart": "Smart Hybrid (recommended): injects top domain/gotcha facts into prompt (max 3), defers tool/CLI syntax to PreToolUse.",
+    "jit": "Strict Just-In-Time: only injects 'always' facts into prompt, all other facts deferred to PreToolUse.",
+    "eager": "Eager Prompt Injection: matches user prompts and injects all matching facts upfront without category filtering.",
     "off": "Disabled: disables all fact injections (loop guard remains active).",
 }
-INJECT_CHOICES = ["jit", "eager", "off"]
+INJECT_CHOICES = ["smart", "jit", "eager", "off"]
+MAX_PROMPT_FACTS_ENV = "CENTSIBLE_MAX_PROMPT_FACTS"
+DEFAULT_MAX_PROMPT_FACTS = 3
+
+
+def resolve_max_prompt_facts() -> int:
+    """Maximum domain facts to inject at prompt turn (default: 3)."""
+    for raw in (os.environ.get(MAX_PROMPT_FACTS_ENV), load_config().get("max_prompt_facts")):
+        try:
+            val = int(raw)
+            if val >= 1:
+                return val
+        except (TypeError, ValueError):
+            continue
+    return DEFAULT_MAX_PROMPT_FACTS
 
 
 def resolve_inject_mode() -> str:
-    """Inject mode from env var, else config.json, else 'jit'."""
+    """Inject mode from env var, else config.json, else 'smart'."""
     for raw in (os.environ.get(INJECT_ENV), load_config().get("inject_mode"), load_config().get("inject")):
-        if raw in ("jit", "eager", "off"):
+        if raw in INJECT_CHOICES:
             return raw
     return DEFAULT_INJECT_MODE
 

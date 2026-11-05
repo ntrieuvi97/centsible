@@ -15,11 +15,13 @@ import unicodedata
 from contextlib import contextmanager, ExitStack
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 DEFAULT_SAVED_TOKENS_PER_HIT = 1500
 DEFAULT_SAVED_TOKENS_PER_LOOP_STOP = 2000
 DEFAULT_USD_PER_MTOK = 3.0
+TOOL_CATEGORIES = frozenset({"cli", "tool", "syntax", "runner"})
+DEFAULT_MAX_PROMPT_FACTS = 3
 
 
 def normalize_text(text: str) -> str:
@@ -739,49 +741,71 @@ class FactsEngine:
         return False
 
     @_facts_locked
-    def match(self, text: str, record_hits: bool = True) -> List[Dict]:
-        """Match input text against all patterns. Returns matching facts."""
+    def match(
+        self,
+        text: str,
+        record_hits: bool = True,
+        max_facts: Optional[int] = None,
+        exclude_categories: Optional[Set[str]] = None,
+    ) -> List[Dict]:
+        """Match input text against patterns with optional capping and category filtering."""
         if not text:
             return []
 
         facts = self.list_facts()
-        matched = []
-        needs_save = False
-        total_injected_delta = 0
-        total_saved_delta = 0
+        candidates = []
 
         for f in facts:
             pattern = f.get("pattern", "")
             if not pattern:
                 continue
-            is_always = (pattern == "*" or f.get("category") == "always")
+            cat = f.get("category", "general")
+            if exclude_categories and cat in exclude_categories:
+                continue
+            is_always = (pattern == "*" or cat == "always")
             try:
                 if is_always or regex_matches(pattern, text):
-                    matched.append(f)
-                    if record_hits:
-                        tok_cost = estimate_tokens(f.get("fact", "")) + 4
-                        tok_saved = f.get("est_savings", DEFAULT_SAVED_TOKENS_PER_HIT)
-                        f["hits"] = f.get("hits", 0) + 1
-                        f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
-                        f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
-                        f["last_hit_at"] = datetime.utcnow().isoformat() + "Z"
-                        total_injected_delta += tok_cost
-                        total_saved_delta += tok_saved
-                        needs_save = True
+                    candidates.append(f)
             except re.error:
                 continue
+
+        # If capped, prioritize: 'always' facts first, then most specific (longer) patterns
+        if max_facts and len(candidates) > max_facts:
+            always = [f for f in candidates if f.get("category") == "always" or f.get("pattern") == "*"]
+            others = [f for f in candidates if f not in always]
+            others.sort(key=lambda x: len(x.get("pattern", "")), reverse=True)
+            candidates = (always + others)[:max_facts]
+
+        if not candidates:
+            return []
+
+        needs_save = False
+        total_injected_delta = 0
+        total_saved_delta = 0
+
+        for f in candidates:
+            if record_hits:
+                tok_cost = estimate_tokens(f.get("fact", "")) + 4
+                tok_saved = f.get("est_savings", DEFAULT_SAVED_TOKENS_PER_HIT)
+                f["hits"] = f.get("hits", 0) + 1
+                f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
+                f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
+                f["last_hit_at"] = datetime.utcnow().isoformat() + "Z"
+                total_injected_delta += tok_cost
+                total_saved_delta += tok_saved
+                needs_save = True
 
         if needs_save and record_hits:
             header_tokens = 24  # "[CENTSIBLE MICRO-SKILLS...]" header overhead
             self._save_merged(facts)
             self.update_metrics(
                 prompt_injections=1,
-                fact_hits=len(matched),
+                fact_hits=len(candidates),
                 injected_tokens=total_injected_delta + header_tokens,
                 saved_discovery_tokens=total_saved_delta,
             )
 
-        return matched
+        return candidates
 
     @_facts_locked
     def match_tool_call(
