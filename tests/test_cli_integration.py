@@ -133,6 +133,7 @@ class TestCliIntegration(unittest.TestCase):
             "facts", "add",
             "--pattern", "bruno",
             "--fact", "Use --compact flag on staging",
+            "--category", "always",
             "--id", "fact-bruno",
         ])
 
@@ -216,6 +217,7 @@ class TestCliIntegration(unittest.TestCase):
             "facts", "add",
             "--pattern", "pytest",
             "--fact", "Use pytest -q",
+            "--category", "always",
             "--id", "fact-pytest",
         ])
         self._run_te(

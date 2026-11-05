@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Entrypoint launcher for centsible (resolves symlinks portably across macOS/Linux)."""
+import os
 import sys
 from pathlib import Path
 
@@ -7,7 +8,22 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from core.cli import main
+try:
+    from core.cli import main
+except BaseException as e:
+    # If invoked as a hook, never block the host agent on an unexpected crash or syntax error
+    if any(arg == "hook" for arg in sys.argv[1:2]):
+        if os.environ.get("CENTSIBLE_DEBUG"):
+            sys.stderr.write(f"[centsible:hook-fallback] Failed to load core: {e}\n")
+        sys.exit(0)
+    raise
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BaseException as e:
+        if any(arg == "hook" for arg in sys.argv[1:2]):
+            if os.environ.get("CENTSIBLE_DEBUG"):
+                sys.stderr.write(f"[centsible:hook-fallback] Hook execution error: {e}\n")
+            sys.exit(0)
+        raise

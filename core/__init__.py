@@ -2,4 +2,4 @@
 centsible: Experience-driven cost and token optimization plugin for AI coding agents.
 """
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"

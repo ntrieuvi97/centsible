@@ -23,6 +23,8 @@ from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, debug_warn, der
 from core.loop_guard import (
     AUTO_LEARN_ENV,
     CONFIG_KEYS,
+    INJECT_CHOICES,
+    INJECT_ENV,
     MODE_ENV,
     MODES,
     MUTATING_TOOLS,
@@ -33,6 +35,7 @@ from core.loop_guard import (
     get_config_path,
     load_config,
     normalize_reflect_mode,
+    resolve_inject_mode,
     resolve_mode,
     resolve_reflect,
     resolve_threshold,
@@ -47,7 +50,7 @@ def _engine(facts_path: Optional[Path] = None) -> FactsEngine:
 
 # Counters that also derive from per-fact hits: facts migrated from the global file into a project
 # carry their hits, so the legacy global metrics.json already includes them. Never add the two.
-_FACT_KEYS = ("fact_hits", "injected_tokens", "saved_discovery_tokens", "auto_learned_facts")
+_FACT_KEYS = ("fact_hits", "attributed_hits", "injected_tokens", "saved_discovery_tokens", "auto_learned_facts")
 
 
 def _summary_all_projects(rate: float) -> Dict[str, Any]:
@@ -68,9 +71,10 @@ def _summary_all_projects(rate: float) -> Dict[str, Any]:
 
 
 _SUM_KEYS = (
-    "prompt_injections", "fact_hits", "tool_hint_hits", "injected_tokens", "saved_discovery_tokens",
-    "loop_interventions", "saved_loop_tokens", "tool_calls_total", "tool_calls_failed",
-    "first_try_successes", "auto_learned_facts", "total_facts",
+    "prompt_injections", "fact_hits", "attributed_hits", "tool_hint_hits", "injected_tokens", "saved_discovery_tokens",
+    "loop_interventions", "saved_loop_tokens", "measured_loop_tokens", "tool_calls_total", "tool_calls_failed",
+    "first_try_successes", "command_calls_total", "command_calls_failed", "first_try_cmd_successes",
+    "auto_learned_facts", "total_facts",
 )
 
 
@@ -139,6 +143,7 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
         "failed_calls": 0,
         "retry_streaks": 0,
         "wasted_retry_calls": 0,
+        "wasted_retry_tokens": 0,
         "discovery_steps_to_first_cmd": 0,
         "calls_before_first_edit": 0,
         "tokens_before_first_edit": 0,
@@ -228,6 +233,8 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
                     stats["retry_streaks"] += 1
                 if consecutive_errors >= 2:
                     stats["wasted_retry_calls"] += 1
+                    err_tokens = sum(results.get(tc.get("id"), (False, 0))[1] for tc in tool_calls)
+                    stats["wasted_retry_tokens"] += err_tokens
             else:
                 consecutive_errors = 0
 
@@ -299,7 +306,20 @@ def handle_hook_pre_invocation() -> None:
     engine = _engine(facts_path)
     guard = LoopGuard(conversation_id)
 
-    matched = engine.match(user_input, record_hits=True)
+    inject_mode = resolve_inject_mode()
+    if inject_mode == "off":
+        matched = []
+    elif inject_mode == "jit":
+        all_matched = engine.match(user_input, record_hits=False)
+        always_facts = [f for f in all_matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
+        if always_facts:
+            matched = engine.match(user_input, record_hits=True)
+            matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
+        else:
+            matched = []
+    else:
+        matched = engine.match(user_input, record_hits=True)
+
     if matched:
         guard.record_injected_facts([f.get("id", "") for f in matched])
 
@@ -388,7 +408,20 @@ def handle_hook_claude_prompt() -> None:
     engine = _engine(facts_path)
     guard = LoopGuard(session_id)
 
-    matched = engine.match(user_prompt, record_hits=True)
+    inject_mode = resolve_inject_mode()
+    if inject_mode == "off":
+        matched = []
+    elif inject_mode == "jit":
+        all_matched = engine.match(user_prompt, record_hits=False)
+        always_facts = [f for f in all_matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
+        if always_facts:
+            matched = engine.match(user_prompt, record_hits=True)
+            matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
+        else:
+            matched = []
+    else:
+        matched = engine.match(user_prompt, record_hits=True)
+
     if matched:
         guard.record_injected_facts([f.get("id", "") for f in matched])
 
@@ -611,13 +644,15 @@ def main() -> int:
     config_mode.add_argument("name", nargs="?", choices=sorted(MODES), help="ultra (strict), normal, weak (tolerant)")
     config_reflect = config_sub.add_parser("reflect", help="Show or set reflection mode (inline | hook | off)")
     config_reflect.add_argument("state", nargs="?", choices=REFLECT_CHOICES, help="inline (recommended: in-turn capture, zero extra turns), hook (blocking stop hook), off")
+    config_inject = config_sub.add_parser("inject", help="Show or set fact injection strategy (jit | eager | off)")
+    config_inject.add_argument("mode", nargs="?", choices=INJECT_CHOICES, help="jit (Just-in-Time Pre-Tool Hints, saves prompt tokens), eager (all matching facts in prompt), off")
     config_get = config_sub.add_parser("get", help="Show one effective threshold or setting")
-    config_get.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect"])
+    config_get.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect", "inject", "inject_mode"])
     config_set = config_sub.add_parser("set", help="Persist a threshold in config.json")
     config_set.add_argument("key", choices=sorted(CONFIG_KEYS))
     config_set.add_argument("value", type=int)
     config_unset = config_sub.add_parser("unset", help="Remove a setting or threshold (back to default)")
-    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect"])
+    config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect", "inject", "inject_mode"])
 
     args = parser.parse_args()
 
@@ -665,11 +700,17 @@ def main() -> int:
             if norm:
                 cfg["reflect"] = norm
                 save_config(cfg)
+        elif args.config_action == "inject" and getattr(args, "mode", None):
+            if args.mode in INJECT_CHOICES:
+                cfg["inject_mode"] = args.mode
+                save_config(cfg)
         elif args.config_action == "get":
             if args.key == "mode":
                 print(resolve_mode())
             elif args.key == "reflect":
                 print(resolve_reflect())
+            elif args.key in ("inject", "inject_mode"):
+                print(resolve_inject_mode())
             else:
                 print(resolve_threshold(args.key))
             return 0
@@ -683,6 +724,8 @@ def main() -> int:
             cfg.pop(args.key, None)
             if args.key == "reflect":
                 cfg.pop("auto_learn_nudge", None)
+            if args.key in ("inject", "inject_mode"):
+                cfg.pop("inject_mode", None)
             save_config(cfg)
 
         note_mode = f" (overridden by env {MODE_ENV})" if os.environ.get(MODE_ENV) in MODES else ""
@@ -695,6 +738,8 @@ def main() -> int:
                 break
         note_reflect = f" (overridden by env {env_ref_name})" if env_ref_name else ""
         print(f"reflect = {resolve_reflect()}{note_reflect}")
+        note_inject = f" (overridden by env {INJECT_ENV})" if os.environ.get(INJECT_ENV) in INJECT_CHOICES else ""
+        print(f"inject = {resolve_inject_mode()}{note_inject}")
         for key in sorted(CONFIG_KEYS):
             env_name = CONFIG_KEYS[key]
             note = f" (overridden by env {env_name})" if os.environ.get(env_name) else ""
@@ -759,10 +804,13 @@ def main() -> int:
         print("=== Centsible Status 🪙 ===")
         print(f"• Facts Storage:  {engine.storage_path}")
         print(f"• Total Facts:    {summary['total_facts']}")
-        print(f"• Total Hits:     {summary['fact_hits']}")
-        print(f"• Loop Stops:     {summary['loop_interventions']}")
+        hit_usage = f" (Attributed: {summary.get('attributed_hits', 0)}, {summary.get('attribution_rate', 0.0):.1f}%)" if summary['fact_hits'] > 0 else ""
+        print(f"• Total Hits:     {summary['fact_hits']}{hit_usage}")
+        measured_trace = f" (~{summary.get('saved_loop_tokens', 0):,} trace tokens saved)" if summary['loop_interventions'] > 0 else ""
+        print(f"• Loop Stops:     {summary['loop_interventions']}{measured_trace}")
         print(f"• Tokens Saved:   ~{summary['net_saved_tokens']:,} tokens ({summary['saved_cents']:.2f}¢ / ${summary['saved_usd']:.4f})")
-        print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% ({summary['tool_calls_total']} tool calls)")
+        cmd_rate_str = f" | {summary.get('first_try_cmd_rate', 100.0):.1f}% cmd" if summary.get("command_calls_total", 0) > 0 else ""
+        print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% tools{cmd_rate_str} ({summary['tool_calls_total']} calls)")
         print(f"• Loop Guard:     Enabled (mode {resolve_mode()}: {resolve_threshold('max_identical_calls')} identical, {resolve_threshold('max_consecutive_errors')} errors)")
         print("• Status:         Active")
         if summary['total_facts'] == 0:
@@ -840,13 +888,18 @@ def main() -> int:
         print(f"• Storage Path:         {'all projects (' + str(summary['projects']) + ')' if args.all else engine.storage_path}")
         print(f"• Active Micro-Facts:   {summary['total_facts']} (Auto-learned: {summary['auto_learned_facts']})")
         print(f"• Total Fact Hits:      {summary['fact_hits']} (Prompt: {summary['prompt_injections']}, Pre-Tool Hints: {summary['tool_hint_hits']})")
-        print(f"• Loop Interventions:   {summary['loop_interventions']} halted runaway loops")
-        print(f"• Tool Execution:       {summary['tool_calls_total']} calls | {summary['first_try_success_rate']:.1f}% 1st-try success | {summary['tool_error_rate']:.1f}% error rate")
+        if summary.get("fact_hits", 0) > 0:
+            print(f"• Fact Attribution:     {summary.get('attributed_hits', 0)} verified applied ({summary.get('attribution_rate', 0.0):.1f}% usage rate)")
+        print(f"• Loop Interventions:   {summary['loop_interventions']} halted runaway loops (~{summary.get('saved_loop_tokens', 0):,} trace tokens saved)")
+        cmd_info = f" (commands: {summary.get('first_try_cmd_rate', 100.0):.1f}% 1st-try)" if summary.get("command_calls_total", 0) > 0 else ""
+        print(f"• Tool Execution:       {summary['tool_calls_total']} calls | {summary['first_try_success_rate']:.1f}% 1st-try success{cmd_info} | {summary['tool_error_rate']:.1f}% error rate")
         print("--- Token & Cost Accounting ---")
-        print(f"• Discovery Saved:      +{summary['saved_discovery_tokens']:,} tokens")
-        print(f"• Loop Guard Saved:     +{summary['saved_loop_tokens']:,} tokens")
+        print(f"• Discovery Saved:      +{summary['saved_discovery_tokens']:,} tokens [Heuristic] | +{summary.get('attributed_saved_tokens', 0):,} tokens [Attributed]")
+        print(f"• Loop Guard Saved:     +{summary['saved_loop_tokens']:,} tokens [Trace-measured]")
         print(f"• Ephemeral Overhead:   -{summary['injected_tokens']:,} tokens")
-        print(f"• Net Tokens Saved:     {summary['net_saved_tokens']:,} tokens (ROI: {summary['roi_multiplier']}x)")
+        print(f"• Net Tokens Saved:     {summary['net_saved_tokens']:,} tokens (ROI: {summary['roi_multiplier']}x) [Heuristic]")
+        if summary.get("attributed_hits", 0) > 0:
+            print(f"• Attributed Net Saved: {summary.get('attributed_net_saved_tokens', 0):,} tokens [Verified]")
         print(f"• Estimated Savings:    {summary['saved_cents']:.2f}¢ (${summary['saved_usd']:.4f} @ ${args.rate:.2f}/1M tok)")
         if not args.all and not summary["total_facts"] and not summary["tool_calls_total"]:
             print("ℹ No data for this directory (stats are per-project). cd into a repo, or run 'centsible stats --all'.")
@@ -857,7 +910,8 @@ def main() -> int:
             print(f"• Steps / User Turns:   {transcript_report['total_steps']} steps / {transcript_report['user_turns']} turns")
             print(f"• Tool / Cmd Calls:     {transcript_report['tool_calls']} tools ({transcript_report['command_calls']} commands, {transcript_report['failed_calls']} failed)")
             print(f"• 1st-Try Cmd Success:  {transcript_report['first_try_cmd_rate']:.1f}% (Discovery steps before 1st cmd: {transcript_report['discovery_steps_to_first_cmd']})")
-            print(f"• Retry Streaks:        {transcript_report['retry_streaks']} streaks ({transcript_report['wasted_retry_calls']} wasted retry calls)")
+            wasted_tok_str = f" / ~{transcript_report.get('wasted_retry_tokens', 0):,} error tokens" if transcript_report.get('wasted_retry_tokens', 0) > 0 else ""
+            print(f"• Retry Streaks:        {transcript_report['retry_streaks']} streaks ({transcript_report['wasted_retry_calls']} wasted retry calls{wasted_tok_str})")
             print(f"• Before 1st Edit:      {transcript_report['calls_before_first_edit']} calls / ~{transcript_report['tokens_before_first_edit']:,} output tokens ({transcript_report['edit_calls']} edit calls)")
         if baseline_report:
             b, a = baseline_report["before"], baseline_report["after"]

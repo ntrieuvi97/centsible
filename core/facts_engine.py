@@ -167,6 +167,23 @@ def redact_secrets(text: str) -> str:
     return text
 
 
+def extract_fact_prescriptions(fact_text: str) -> Tuple[List[str], List[str]]:
+    """
+    Extract prescribed CLI flags and quoted values/identifiers from fact text,
+    ignoring negative clauses ('instead of...').
+    """
+    if not fact_text:
+        return [], []
+    prescribed_text = re.split(r"\binstead of\b", fact_text, flags=re.IGNORECASE)[0]
+    raw_flags = re.findall(r"(?:^|\s)(--[a-zA-Z0-9_-]+|-[a-zA-Z0-9])\b", prescribed_text)
+    flags = [fl.strip() for fl in raw_flags if fl.strip()]
+    quoted = [
+        q.strip() for q in re.findall(r"['\"`]([^'\"`]{2,60})['\"`]", prescribed_text)
+        if len(q.strip()) >= 2
+    ]
+    return flags, quoted
+
+
 def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
     """
     Check if a micro-fact prescribes specific CLI flags (e.g. --compact, -q)
@@ -174,18 +191,62 @@ def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
     """
     if not fact_text or not cmd_text:
         return False
-    # Ignore negative clauses like "instead of '...'" so failed commands/flags aren't required
-    prescribed_text = re.split(r"\binstead of\b", fact_text, flags=re.IGNORECASE)[0]
-    flags = re.findall(r"(?:^|\s)(--[a-zA-Z0-9_-]+|-[a-zA-Z0-9])\b", prescribed_text)
-    flags = [fl.strip() for fl in flags if fl.strip()]
+    flags, quoted = extract_fact_prescriptions(fact_text)
     if flags:
         return any(fl not in cmd_text for fl in flags)
-    quoted = [
-        q for q in re.findall(r"['\"`]([^'\"`]{2,40})['\"`]", prescribed_text)
-        if q.isascii()
-    ]
+    ascii_quoted = [q for q in quoted if q.isascii()]
+    if ascii_quoted:
+        return any(q not in cmd_text for q in ascii_quoted)
+    return False
+
+
+def check_fact_attribution(
+    fact: Dict[str, Any],
+    tool_call: Dict[str, Any],
+    is_success: bool = True,
+) -> bool:
+    """
+    Check whether a tool execution can be attributed to an injected micro-fact.
+    Returns True if:
+    1. A prescribed CLI flag from the fact is present in tool arguments.
+    2. A quoted literal/identifier from the fact is present in tool arguments.
+    3. The tool call target matches the fact's pattern and executed without error.
+    """
+    fact_text = fact.get("fact", "")
+    flags, quoted = extract_fact_prescriptions(fact_text)
+
+    args = tool_call.get("args") or {}
+    arg_parts: List[str] = []
+    for k, v in args.items():
+        if isinstance(v, (str, int, float, bool)):
+            arg_parts.append(str(v))
+        elif isinstance(v, (list, dict)):
+            arg_parts.append(json.dumps(v, ensure_ascii=False))
+    combined_args = " ".join(arg_parts)
+
+    if not combined_args:
+        return False
+
+    # 1. Flag attribution: check if prescribed flag is used
+    if flags and any(fl in combined_args for fl in flags):
+        return True
+
+    # 2. Quoted literal attribution: check if quoted identifier/value is used
     if quoted:
-        return any(q not in cmd_text for q in quoted)
+        for q in quoted:
+            if q.lower() in ("true", "false", "null", "none"):
+                continue
+            if q in combined_args or fold_vietnamese(q).lower() in fold_vietnamese(combined_args).lower():
+                return True
+
+    # 3. Domain pattern match + execution success
+    pattern = fact.get("pattern", "")
+    if pattern and pattern != "*" and is_success:
+        tool_name = str(tool_call.get("name") or "")
+        target_text = f"{tool_name} {combined_args}"
+        if regex_matches(pattern, target_text):
+            return True
+
     return False
 
 
@@ -403,18 +464,41 @@ def _facts_locked(fn):
 
 def derive_summary(base: Dict[str, Any], usd_per_mtok: float = DEFAULT_USD_PER_MTOK) -> Dict[str, Any]:
     """Add ROI / cost / rate fields to summed counters (one project, or several added together)."""
-    saved_loop = base["saved_loop_tokens"]
-    gross_saved = base["saved_discovery_tokens"] + saved_loop
-    net_saved = gross_saved - base["injected_tokens"]
+    saved_loop = base.get("saved_loop_tokens", 0)
+    saved_discovery = base.get("saved_discovery_tokens", 0)
+    injected = base.get("injected_tokens", 0)
+    gross_saved = saved_discovery + saved_loop
+    net_saved = gross_saved - injected
     saved_usd = (net_saved / 1_000_000.0) * usd_per_mtok
-    total_calls = base["tool_calls_total"]
-    first_try_rate = (base["first_try_successes"] / total_calls * 100.0) if total_calls > 0 else 100.0
-    error_rate = (base["tool_calls_failed"] / total_calls * 100.0) if total_calls > 0 else 0.0
-    roi = (gross_saved / base["injected_tokens"]) if base["injected_tokens"] > 0 else 0.0
+    total_calls = base.get("tool_calls_total", 0)
+    first_try_rate = (base.get("first_try_successes", 0) / total_calls * 100.0) if total_calls > 0 else 100.0
+    error_rate = (base.get("tool_calls_failed", 0) / total_calls * 100.0) if total_calls > 0 else 0.0
+    roi = (gross_saved / injected) if injected > 0 else 0.0
+
+    cmd_calls = base.get("command_calls_total", 0)
+    cmd_first_try_rate = (base.get("first_try_cmd_successes", 0) / cmd_calls * 100.0) if cmd_calls > 0 else 100.0
+    cmd_error_rate = (base.get("command_calls_failed", 0) / cmd_calls * 100.0) if cmd_calls > 0 else 0.0
+
+    fact_hits = base.get("fact_hits", 0)
+    attr_hits = base.get("attributed_hits", 0)
+    attribution_rate = round((attr_hits / fact_hits * 100.0), 1) if fact_hits > 0 else 0.0
+    attributed_discovery = attr_hits * DEFAULT_SAVED_TOKENS_PER_HIT
+    attributed_net_saved = attributed_discovery + saved_loop - injected
+
     return {
         **base,
         "gross_saved_tokens": gross_saved,
         "net_saved_tokens": net_saved,
+        "attributed_hits": attr_hits,
+        "attribution_rate": attribution_rate,
+        "attributed_saved_tokens": attributed_discovery,
+        "attributed_net_saved_tokens": attributed_net_saved,
+        "command_calls_total": cmd_calls,
+        "command_calls_failed": base.get("command_calls_failed", 0),
+        "first_try_cmd_successes": base.get("first_try_cmd_successes", 0),
+        "first_try_cmd_rate": round(cmd_first_try_rate, 1),
+        "command_error_rate": round(cmd_error_rate, 1),
+        "measured_loop_tokens": base.get("measured_loop_tokens", 0),
         "saved_usd": round(saved_usd, 4),
         "saved_cents": round(saved_usd * 100.0, 2),
         "first_try_success_rate": round(first_try_rate, 1),
@@ -436,14 +520,19 @@ class FactsEngine:
         defaults = {
             "prompt_injections": 0,
             "fact_hits": 0,
+            "attributed_hits": 0,
             "tool_hint_hits": 0,
             "injected_tokens": 0,
             "saved_discovery_tokens": 0,
             "loop_interventions": 0,
             "saved_loop_tokens": 0,
+            "measured_loop_tokens": 0,
             "tool_calls_total": 0,
             "tool_calls_failed": 0,
             "first_try_successes": 0,
+            "command_calls_total": 0,
+            "command_calls_failed": 0,
+            "first_try_cmd_successes": 0,
             "auto_learned_facts": 0,
         }
         if not self.metrics_path.exists():
@@ -477,17 +566,21 @@ class FactsEngine:
         m = self.load_metrics()
         facts = self.list_facts()
         # Reconcile with per-fact counters if facts were used before metrics.json existed
-        fact_hits = max(m["fact_hits"], sum(f.get("hits", 0) for f in facts))
+        fact_hits = max(m.get("fact_hits", 0), sum(f.get("hits", 0) for f in facts))
+        attributed_hits = max(
+            m.get("attributed_hits", 0),
+            sum(f.get("attributed_hits", 0) for f in facts),
+        )
         injected_tokens = max(
-            m["injected_tokens"],
+            m.get("injected_tokens", 0),
             sum(f.get("injected_tokens", f.get("hits", 0) * (estimate_tokens(f.get("fact", "")) + 4)) for f in facts),
         )
         saved_discovery = max(
-            m["saved_discovery_tokens"],
+            m.get("saved_discovery_tokens", 0),
             sum(f.get("saved_tokens", f.get("hits", 0) * DEFAULT_SAVED_TOKENS_PER_HIT) for f in facts),
         )
         auto_learned_count = max(
-            m["auto_learned_facts"],
+            m.get("auto_learned_facts", 0),
             sum(1 for f in facts if f.get("category") in ("auto-learned", "gotcha") and str(f.get("id", "")).startswith("auto_")),
         )
         base = {
@@ -495,6 +588,7 @@ class FactsEngine:
             "auto_learned_facts": auto_learned_count,
             "total_facts": len(facts),
             "fact_hits": fact_hits,
+            "attributed_hits": attributed_hits,
             "injected_tokens": injected_tokens,
             "saved_discovery_tokens": saved_discovery,
         }
@@ -533,6 +627,32 @@ class FactsEngine:
                 if g.get("id") not in ids and g.get("pattern") not in pats
             ]
         return [f for f in facts if not category or f.get("category") == category]
+
+    def get_fact(self, fact_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a single fact by ID."""
+        for f in self.list_facts():
+            if f.get("id") == fact_id:
+                return f
+        return None
+
+    @_facts_locked
+    def update_fact_attribution(self, fact_id: str, scope: str = "project") -> bool:
+        """Increment attributed_hits for a fact when its usage is confirmed."""
+        path = self._scope_path(scope)
+        facts = self._read(path)
+        updated = False
+        for f in facts:
+            if f.get("id") == fact_id:
+                f["attributed_hits"] = f.get("attributed_hits", 0) + 1
+                f["last_attributed_at"] = datetime.utcnow().isoformat() + "Z"
+                updated = True
+                break
+        if updated:
+            self._write(path, facts)
+            return True
+        if scope == "project" and self.global_path:
+            return self.update_fact_attribution(fact_id, scope="global")
+        return False
 
     @_facts_locked
     def add_fact(
