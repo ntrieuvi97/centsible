@@ -377,6 +377,29 @@ def _facts_locked(fn):
     return wrapper
 
 
+def derive_summary(base: Dict[str, Any], usd_per_mtok: float = DEFAULT_USD_PER_MTOK) -> Dict[str, Any]:
+    """Add ROI / cost / rate fields to summed counters (one project, or several added together)."""
+    saved_loop = base["saved_loop_tokens"]
+    gross_saved = base["saved_discovery_tokens"] + saved_loop
+    net_saved = gross_saved - base["injected_tokens"]
+    saved_usd = (net_saved / 1_000_000.0) * usd_per_mtok
+    total_calls = base["tool_calls_total"]
+    first_try_rate = (base["first_try_successes"] / total_calls * 100.0) if total_calls > 0 else 100.0
+    error_rate = (base["tool_calls_failed"] / total_calls * 100.0) if total_calls > 0 else 0.0
+    roi = (gross_saved / base["injected_tokens"]) if base["injected_tokens"] > 0 else 0.0
+    return {
+        **base,
+        "gross_saved_tokens": gross_saved,
+        "net_saved_tokens": net_saved,
+        "saved_usd": round(saved_usd, 4),
+        "saved_cents": round(saved_usd * 100.0, 2),
+        "first_try_success_rate": round(first_try_rate, 1),
+        "tool_error_rate": round(error_rate, 1),
+        "roi_multiplier": round(roi, 1),
+        "usd_per_mtok": usd_per_mtok,
+    }
+
+
 class FactsEngine:
     def __init__(self, storage_path: Optional[Path] = None, global_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
@@ -443,33 +466,15 @@ class FactsEngine:
             m["auto_learned_facts"],
             sum(1 for f in facts if f.get("category") in ("auto-learned", "gotcha") and str(f.get("id", "")).startswith("auto_")),
         )
-        saved_loop = m["saved_loop_tokens"]
-        gross_saved = saved_discovery + saved_loop
-        net_saved = gross_saved - injected_tokens
-        saved_usd = (net_saved / 1_000_000.0) * usd_per_mtok
-        saved_cents = saved_usd * 100.0
-        total_calls = m["tool_calls_total"]
-        first_try_rate = (m["first_try_successes"] / total_calls * 100.0) if total_calls > 0 else 100.0
-        error_rate = (m["tool_calls_failed"] / total_calls * 100.0) if total_calls > 0 else 0.0
-        roi = (gross_saved / injected_tokens) if injected_tokens > 0 else 0.0
-
-        return {
+        base = {
             **m,
             "auto_learned_facts": auto_learned_count,
             "total_facts": len(facts),
             "fact_hits": fact_hits,
             "injected_tokens": injected_tokens,
             "saved_discovery_tokens": saved_discovery,
-            "saved_loop_tokens": saved_loop,
-            "gross_saved_tokens": gross_saved,
-            "net_saved_tokens": net_saved,
-            "saved_usd": round(saved_usd, 4),
-            "saved_cents": round(saved_cents, 2),
-            "first_try_success_rate": round(first_try_rate, 1),
-            "tool_error_rate": round(error_rate, 1),
-            "roi_multiplier": round(roi, 1),
-            "usd_per_mtok": usd_per_mtok,
         }
+        return derive_summary(base, usd_per_mtok)
 
     @staticmethod
     def _read(path: Optional[Path]) -> List[Dict]:
