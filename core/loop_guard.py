@@ -32,6 +32,14 @@ MUTATING_TOOLS = {
     "edit_file", "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file",
     "write", "edit", "apply_patch",
 }
+READ_ONLY_DIAGNOSTIC_TOOLS = {
+    "Read", "read_file", "Grep", "grep", "Glob", "glob", "read_resource",
+    "list_resources", "list_plugin_accounts", "view", "cat",
+    "search_web", "web_search", "web_fetch", "mcp__openclaw__web_fetch",
+    "mcp__openclaw__read", "fetch", "find",
+}
+POLLING_ACTIONS = {"poll", "status", "checkpoint_status"}
+POLLING_TOOLS = {"manage_task", "checkpoint_status", "process", "mcp__openclaw__process"}
 VOLATILE_ARG_KEYS = {
     "toolSummary", "WaitMsBeforeAsync", "description", "timeout", "IsDaemon",
     "workdir", "yieldMs", "background", "pty",
@@ -352,7 +360,12 @@ class LoopGuard:
             state["last_call_hash"] = call_hash
 
         # Trigger 1: Too many identical invocations
-        if state["consecutive_identical_count"] >= self.max_identical_calls:
+        is_polling = (
+            tool_name in POLLING_TOOLS
+            or (isinstance(args, dict) and args.get("action") in POLLING_ACTIONS)
+        )
+        max_identical = 20 if is_polling else self.max_identical_calls
+        if state["consecutive_identical_count"] >= max_identical:
             state["interventions"] = state.get("interventions", 0) + 1
             recent_tokens = state.get("recent_error_tokens", [])
             if recent_tokens:
@@ -375,8 +388,10 @@ class LoopGuard:
             )
             return "ask", reason
 
-        # Trigger 2: Too many consecutive errors on same target
-        if state.get("consecutive_errors_count", 0) >= self.max_consecutive_errors:
+        # Trigger 2: Too many consecutive errors on execution/mutating tools
+        # Do not trip circuit breaker on read-only diagnostic tools (Read, Grep, fetch, etc.)
+        is_read_only = tool_name in READ_ONLY_DIAGNOSTIC_TOOLS
+        if not is_read_only and state.get("consecutive_errors_count", 0) >= self.max_consecutive_errors:
             state["interventions"] = state.get("interventions", 0) + 1
             # A blocked call never reaches PostToolUse, so nothing else could reset this: block once, then release.
             errors = state["consecutive_errors_count"]
