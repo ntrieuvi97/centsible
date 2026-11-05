@@ -215,6 +215,48 @@ def lint_pattern(pattern: str) -> Optional[str]:
     return None
 
 
+# Words in a correction that say nothing about the situation (directives, pronouns, politeness).
+_CONTEXT_FILLER = frozenset({
+    "never", "always", "dont", "must", "should", "please", "instead", "with", "that", "this", "then",
+    "your", "when", "from", "into", "also", "only", "just", "does", "will", "here", "there",
+    "đừng", "luôn", "phải", "không", "dùng", "chạy", "nhớ", "quy", "tắc", "lưu", "được", "nhưng", "và", "của",
+})
+_CONTEXT_WORD_RE = re.compile(r"[^\W\d_]{4,}")
+CONTEXT_SPAN = 30
+
+
+def contextualize_pattern(targets: List[str], text: str) -> Optional[str]:
+    """Build a trigger from `targets`, pairing each loose one with situation words from `text`.
+
+    A correction like "never use pip directly" yields target `pip`, which alone fires on every pip
+    mention. Pairing it with "directly" (`pip.{0,30}(directly)`, either order) keeps the fact for the
+    situation the user actually corrected. Targets that already anchor on an identifier stay as-is, and
+    only the first loose target is kept (in `never use pip, use uv` the subject is pip, not uv).
+    Returns None when no usable pattern remains (the caller then drops the fact).
+    """
+    parts: List[str] = []
+    for target in targets:
+        esc = re.escape(target)
+        if lint_pattern(esc) is None:
+            parts.append(esc)
+            continue
+        if any("{0," in p for p in parts):  # one contextualized target is the subject; later ones (e.g. the replacement tool) only add noise
+            continue
+        low = target.lower()
+        context: List[str] = []
+        for w in _CONTEXT_WORD_RE.findall(text.lower()):
+            if w != low and w not in GENERIC_TERMS and w not in _CONTEXT_FILLER and w not in context:
+                context.append(w)
+        if not context:
+            continue
+        group = "|".join(re.escape(w) for w in context[:3])
+        parts.append(f"({esc}.{{0,{CONTEXT_SPAN}}}({group})|({group}).{{0,{CONTEXT_SPAN}}}{esc})")
+    if not parts:
+        return None
+    pattern = "|".join(parts)
+    return pattern if lint_pattern(pattern) is None else None
+
+
 def estimate_tokens(text: str) -> int:
     """Estimate LLM token count (~4 UTF-8 bytes per token; accurate for both English & Vietnamese)."""
     if not text:
@@ -1038,6 +1080,10 @@ class FactsEngine:
             return None
 
         pattern = "|".join(targets[:2])
+        if lint_pattern(pattern):  # bare tool names (pip, pytest) fire on every mention: anchor them in the correction's own words
+            pattern = contextualize_pattern(targets[:2], norm)
+            if not pattern:
+                return None
         slug = re.sub(r"[^a-zA-Z0-9_-]", "_", targets[0])[:32]
         # Text digest keeps two different rules about the same file apart; the same prompt stays idempotent.
         fact_id = f"auto_gotcha_{slug}_{hashlib.sha1(norm.encode('utf-8')).hexdigest()[:6]}"

@@ -8,7 +8,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.facts_engine import MAX_FACT_CHARS, FactsEngine, bound_wildcards, get_default_facts_path, lint_pattern
+import re
+
+from core.facts_engine import (
+    MAX_FACT_CHARS, FactsEngine, bound_wildcards, contextualize_pattern, get_default_facts_path, lint_pattern,
+    regex_matches,
+)
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestFactsEngine(unittest.TestCase):
@@ -389,6 +396,40 @@ class TestPatternSpecificity(unittest.TestCase):
             long_ok = "pip install " + " ".join(f"pkg{i}" for i in range(60))
             self.assertIsNone(engine.auto_learn_from_recovery("pip list", long_ok))
             self.assertEqual(engine.list_facts(), [])
+
+    def test_shipped_docs_only_teach_patterns_that_save(self):
+        """Agents copy `facts add` examples from the docs; every one must pass the same checks."""
+        files = [ROOT / "README.md", *sorted((ROOT / "skills").rglob("*.md")), *sorted((ROOT / "commands").glob("*.md"))]
+        seen = 0
+        for path in files:
+            for m in re.finditer(r'--pattern\s+"((?:[^"\\]|\\.)*)"(?:\s+--fact\s+"((?:[^"\\]|\\.)*)")?', path.read_text(encoding="utf-8")):
+                pattern, fact = m.group(1), m.group(2) or ""
+                if pattern.startswith("<"):
+                    continue
+                seen += 1
+                self.assertIsNone(lint_pattern(pattern), f"{path.name}: {pattern}")
+                self.assertLessEqual(len(fact), MAX_FACT_CHARS, f"{path.name}: {fact}")
+        self.assertGreaterEqual(seen, 4)
+
+    def test_contextualize_pairs_a_loose_target_with_the_situation(self):
+        pattern = contextualize_pattern(["pip", "uv"], "never use pip directly, always use uv pip")
+        self.assertIsNone(lint_pattern(pattern))
+        self.assertTrue(regex_matches(pattern, "installing with pip directly"))
+        self.assertFalse(regex_matches(pattern, "pip install requests"))
+        self.assertNotIn("uv", pattern)  # only the subject, not the replacement tool
+
+    def test_contextualize_keeps_identifier_targets_and_drops_hopeless_ones(self):
+        self.assertIsNone(lint_pattern(contextualize_pattern(["cli.py"], "don't edit cli.py")))
+        self.assertIsNone(contextualize_pattern(["pip"], "never use pip"))  # no situation words to pair with
+
+    def test_auto_learn_from_correction_keeps_tool_corrections_but_anchored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            entry = engine.auto_learn_from_correction("do not run pytest without the -q flag")
+            self.assertIsNotNone(entry)
+            self.assertFalse(regex_matches(entry["pattern"], "pytest là gì"))
+            self.assertTrue(regex_matches(entry["pattern"], "run pytest without flags"))
+            self.assertIsNone(engine.auto_learn_from_correction("never use pip"))
 
     def test_specificity_cases_from_the_qc_repo(self):
         """Prompts the old keyword patterns wrongly fired on must not match the tightened ones."""

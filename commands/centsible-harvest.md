@@ -23,7 +23,7 @@ Your objective is to systematically explore this repository and capture **5 to 8
 4. **Filter & Select 5 to 8 Golden Facts**:
    Ensure each fact follows Centsible's Micro-Fact Standards:
    - **Concise:** Exactly 1 imperative sentence ($\le 120$ characters), zero conversational fluff.
-   - **Targeted Regex Pattern:** Must trigger ONLY when relevant (e.g., `pytest|test` or `auth/|token`), avoid overly generic patterns like `.*`.
+   - **Targeted Regex Pattern:** Must trigger ONLY in the situation the fact covers. Anchor on an identifier (`auth/login\.py`, `deploy_staging`), a tool plus a symptom (`pytest.{0,40}(fail|error)`), or an action plus context. A lone short word (`pytest`, `pip`, `token`) or generic words (`run.*test`, `.*`) are rejected by `facts add` (exit 2); rewrite the pattern instead of using `--force`.
    - **Categories:** `tool_flag`, `package_manager`, `gotcha`, or `workflow`.
 
 5. **Store Facts via CLI**:
