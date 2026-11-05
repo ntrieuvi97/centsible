@@ -53,9 +53,20 @@ Always keep the fact to a single, direct sentence without conversational padding
 ```
 Examples:
 ```bash
-./bin/centsible facts add --pattern "pytest|unit-test" --fact "Run unit tests with 'pytest tests/ -q --tb=short'."
-./bin/centsible facts add --pattern "bruno|api-test" --fact "Append --condense to Bruno commands to save 80% JSON tokens."
+./bin/centsible facts add --pattern "pytest.{0,40}(fail|error|slow)" --fact "Run unit tests with 'pytest tests/ -q --tb=short'."
+./bin/centsible facts add --pattern "bruno.{0,30}(run|uat|stg)" --fact "Append --condense to Bruno commands to save 80% JSON tokens."
+./bin/centsible facts add --pattern "auth/login\.py" --fact "Never mutate token keys directly."
 ```
+
+The pattern decides when the fact is injected, so it must describe the *situation*, not a keyword. Saving is
+rejected (exit 2) for a lone short word (`pytest`, `bruno`, `pip`), for generic words only (`run.*test`), and for
+facts over 240 characters. Anchor on, in order of strength:
+1. an identifier: file, script, table, API path or flag (`query_argus`, `fast-e2e`, `a/b.py`);
+2. a tool plus a symptom (`pytest.{0,40}(fail|error)`);
+3. an action plus object plus context (`(create|book).{0,12}order.{0,40}(uat|stg)`).
+
+Before saving, check a couple of prompts that must not match with `centsible facts test "<prompt>"`.
+`--force` overrides the check; use it only when the pattern is deliberately broad.
 
 ### 4. Test Fact Matching
 Verify what facts trigger for a specific user prompt:
