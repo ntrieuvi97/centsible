@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.6.3](https://img.shields.io/badge/Version-0.6.3-orange.svg)](#)
+[![Version: 0.6.4](https://img.shields.io/badge/Version-0.6.4-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -46,6 +46,7 @@ ln -sf ~/.gemini/config/plugins/centsible/bin/centsible ~/.local/bin/centsible
 # System status & ROI metrics
 centsible status
 centsible stats [--all] [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--since 2026-11-04] [--no-baseline]   # baseline auto-detects this repo's transcripts
+centsible events [--days 7] [--agent main] [--json]   # per-agent hint/block/apply counts from ~/.centsible/events.jsonl; flags facts shown >=20x, never applied
 
 # Manage micro-facts and architectural gotchas
 centsible facts add --pattern "pytest.{0,40}(fail|error|spawn)" --fact "Run with 'pytest tests/ -q --tb=short'"
