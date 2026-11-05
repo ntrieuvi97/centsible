@@ -86,7 +86,7 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(output, {})
 
     def test_claude_cli_hint_does_not_block_the_command(self):
-        self._run_te(["facts", "add", "--pattern", "bruno", "--fact", "Append --compact to bruno commands", "--id", "f-bruno"])
+        self._run_te(["facts", "add", "--pattern", "bruno", "--fact", "Append --compact to bruno commands", "--id", "f-bruno", "--force"])
         sid = f"claude_hint_{id(self)}"
         payload = json.dumps({
             "tool_name": "Bash",

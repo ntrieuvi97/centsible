@@ -199,7 +199,7 @@ class TestLoopGuard(unittest.TestCase):
     def test_pre_tool_fact_hint_when_uninjected(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = FactsEngine(Path(tmp) / "facts.jsonl")
-            engine.add_fact("bruno", "Append --compact to bruno commands", fact_id="f-bruno")
+            engine.add_fact("bruno", "Append --compact to bruno commands", fact_id="f-bruno", force=True)
 
             # Agent calls bruno without --compact when prompt did not inject f-bruno
             call_missing = {"name": "run_command", "args": {"CommandLine": "bruno run suite"}}
@@ -222,6 +222,7 @@ class TestLoopGuard(unittest.TestCase):
                 "Keep floating_cards intact in AnimeLayerCompositor",
                 category="gotcha",
                 fact_id="f-gotcha",
+                force=True,
             )
             edit_call = {"name": "Edit", "args": {"file_path": "/app/src/compositor.py"}}
             decision_g, reason_g = self.guard.check_pre_tool_use(edit_call, engine=engine)

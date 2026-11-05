@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.facts_engine import FactsEngine, bound_wildcards, get_default_facts_path
+from core.facts_engine import MAX_FACT_CHARS, FactsEngine, bound_wildcards, get_default_facts_path, lint_pattern
 
 
 class TestFactsEngine(unittest.TestCase):
@@ -21,7 +21,7 @@ class TestFactsEngine(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_add_and_list_facts(self):
-        self.engine.add_fact("pytest|test", "Run pytest with -q flag", category="test", fact_id="test-1")
+        self.engine.add_fact("pytest|test", "Run pytest with -q flag", category="test", fact_id="test-1", force=True)
         facts = self.engine.list_facts()
         self.assertEqual(len(facts), 1)
         self.assertEqual(facts[0]["id"], "test-1")
@@ -34,8 +34,8 @@ class TestFactsEngine(unittest.TestCase):
             self.engine.add_fact("[invalid regex(", "Some fact")
 
     def test_match_facts(self):
-        self.engine.add_fact("bruno|api", "Use --compact flag for Bruno", fact_id="bruno-1")
-        self.engine.add_fact("docker", "Use docker compose v2", fact_id="docker-1")
+        self.engine.add_fact("bruno|api", "Use --compact flag for Bruno", fact_id="bruno-1", force=True)
+        self.engine.add_fact("docker", "Use docker compose v2", fact_id="docker-1", force=True)
 
         # Test prompt matching bruno
         matched = self.engine.match("Can you run the bruno collection?")
@@ -52,7 +52,7 @@ class TestFactsEngine(unittest.TestCase):
         self.assertEqual(len(matched_none), 0)
 
     def test_wildcards_are_bounded_on_long_prompts(self):
-        self.engine.add_fact("pooling.*cancel.*idle", "pooling fact", fact_id="p")
+        self.engine.add_fact("pooling.*cancel.*idle", "pooling fact", fact_id="p", force=True)
         near = "pooling: cancel when idle"
         far = "pooling " + "x" * 500 + " cancel " + "y" * 500 + " idle"
         self.assertEqual(len(self.engine.match(near, record_hits=False)), 1)
@@ -70,7 +70,7 @@ class TestFactsEngine(unittest.TestCase):
         self.engine.add_fact(".*", "ok", category="always", fact_id="al")
 
     def test_format_ephemeral_message(self):
-        self.engine.add_fact("bruno", "Fact A", fact_id="a")
+        self.engine.add_fact("bruno", "Fact A", fact_id="a", force=True)
         matched = self.engine.match("bruno")
         msg = self.engine.format_ephemeral_message(matched)
         self.assertIsNotNone(msg)
@@ -81,7 +81,7 @@ class TestFactsEngine(unittest.TestCase):
         self.assertIsNone(self.engine.format_ephemeral_message([]))
 
     def test_remove_fact(self):
-        self.engine.add_fact("test-pattern", "Fact to remove", fact_id="rem-1")
+        self.engine.add_fact("test-pattern", "Fact to remove", fact_id="rem-1", force=True)
         self.assertTrue(self.engine.remove_fact("rem-1"))
         self.assertEqual(len(self.engine.list_facts()), 0)
 
@@ -93,6 +93,7 @@ class TestFactsEngine(unittest.TestCase):
             "bruno",
             "Append --compact to Bruno commands on staging",
             fact_id="bruno-condense",
+            force=True,
         )
         # Missing --compact -> triggers tool hint
         missing_call = {"name": "run_command", "args": {"CommandLine": "bruno run staging"}}
@@ -189,6 +190,7 @@ class TestFactsEngine(unittest.TestCase):
             "kiểm thử|chạy đơ",
             "Dùng 'pytest -q' trên môi trường 'thử nghiệm'",
             fact_id="vn-test",
+            force=True,
         )
         # 1. Exact NFC Vietnamese match
         self.assertEqual(len(self.engine.match("Hãy chạy kiểm thử giúp tôi")), 1)
@@ -234,9 +236,9 @@ class TestFactsEngine(unittest.TestCase):
                     os.environ["CENTSIBLE_HOME"] = old_env
 
     def test_plain_patterns_match_whole_tokens_only(self):
-        self.engine.add_fact("pip", "use uv pip", fact_id="p")
-        self.engine.add_fact("auth/", "auth rule", fact_id="a")
-        self.engine.add_fact("jest|vitest", "run via npx", fact_id="j")
+        self.engine.add_fact("pip", "use uv pip", fact_id="p", force=True)
+        self.engine.add_fact("auth/", "auth rule", fact_id="a", force=True)
+        self.engine.add_fact("jest|vitest", "run via npx", fact_id="j", force=True)
         hit = lambda t: sorted(f["id"] for f in self.engine.match(t, record_hits=False))
         self.assertEqual(hit("stdin=subprocess.PIPE"), [])
         self.assertEqual(hit("pipeline stage"), [])
@@ -257,20 +259,20 @@ class TestGlobalFacts(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_global_fact_visible_in_every_project_but_stored_once(self):
-        self.engine.add_fact("rtk", "prefix shell with rtk", fact_id="g1", scope="global")
+        self.engine.add_fact("rtk", "prefix shell with rtk", fact_id="g1", scope="global", force=True)
         other = FactsEngine(Path(self.tmp.name) / "other" / "facts.jsonl", global_path=self.engine.global_path)
         self.assertEqual([f["id"] for f in other.match("use rtk here", record_hits=False)], ["g1"])
         self.assertEqual(self.engine.list_facts(scope="project"), [])  # never copied into the project file
 
     def test_project_fact_overrides_global_with_same_pattern(self):
-        self.engine.add_fact("pytest", "global way", fact_id="g", scope="global")
-        self.engine.add_fact("pytest", "project way", fact_id="p")
+        self.engine.add_fact("pytest", "global way", fact_id="g", scope="global", force=True)
+        self.engine.add_fact("pytest", "project way", fact_id="p", force=True)
         self.assertEqual([f["fact"] for f in self.engine.match("run pytest", record_hits=False)], ["project way"])
 
     def test_hits_persist_to_global_file_and_overridden_global_survives(self):
-        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global")
-        self.engine.add_fact("pytest", "global pytest", fact_id="g2", scope="global")
-        self.engine.add_fact("pytest", "project pytest", fact_id="p")
+        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global", force=True)
+        self.engine.add_fact("pytest", "global pytest", fact_id="g2", scope="global", force=True)
+        self.engine.add_fact("pytest", "project pytest", fact_id="p", force=True)
         self.engine.match("rtk and pytest")  # records hits for g1 (global) and p (project)
         glob = {f["id"]: f for f in self.engine.list_facts(scope="global")}
         self.assertEqual(glob["g1"]["hits"], 1)
@@ -279,17 +281,17 @@ class TestGlobalFacts(unittest.TestCase):
         self.assertNotIn("_scope", self.engine.list_facts(scope="global")[0])
 
     def test_remove_is_scoped(self):
-        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global")
+        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global", force=True)
         self.assertFalse(self.engine.remove_fact("g1"))  # project scope by default
         self.assertTrue(self.engine.remove_fact("g1", scope="global"))
 
     def test_global_scope_without_global_file_is_an_error(self):
         solo = FactsEngine(Path(self.tmp.name) / "solo" / "facts.jsonl")
         with self.assertRaises(ValueError):
-            solo.add_fact("x", "y", scope="global")
+            solo.add_fact("x", "y", scope="global", force=True)
 
     def test_rewrite_keeps_comments_and_unparsable_lines(self):
-        self.engine.add_fact("foo", "fact A", fact_id="a")
+        self.engine.add_fact("foo", "fact A", fact_id="a", force=True)
         path = self.engine.storage_path
         path.write_text("# my note\n" + path.read_text() + "{corrupt\n")
         self.engine.match("foo")  # records a hit -> rewrites the file
@@ -299,9 +301,9 @@ class TestGlobalFacts(unittest.TestCase):
         self.assertEqual([f["id"] for f in self.engine.list_facts()], ["a"])
 
     def test_same_pattern_different_fact_is_kept_but_identical_is_idempotent(self):
-        self.engine.add_fact("pytest", "run X")
-        self.engine.add_fact("pytest", "run Y")
-        self.engine.add_fact("pytest", "run Y")
+        self.engine.add_fact("pytest", "run X", force=True)
+        self.engine.add_fact("pytest", "run Y", force=True)
+        self.engine.add_fact("pytest", "run Y", force=True)
         self.assertEqual(sorted(f["fact"] for f in self.engine.list_facts()), ["run X", "run Y"])
 
     def test_auto_gotchas_about_same_file_do_not_overwrite(self):
@@ -329,6 +331,77 @@ class TestGlobalFacts(unittest.TestCase):
         self.assertNotIn("SECRET123456", learned["fact"])
         gotcha = self.engine.auto_learn_from_correction("đừng sửa cli.py khi API_KEY=abcdef123 còn trong env")
         self.assertNotIn("abcdef123", gotcha["fact"])
+
+
+class TestPatternSpecificity(unittest.TestCase):
+    """Saved facts are injected into prompts, so a pattern must describe the situation, not one keyword."""
+
+    LOOSE = [
+        "pip", "rtk", "pytest|rtk", "helm", "bruno",
+        "(run.*test|test.*suite|chạy.*test)",
+        "(open ticket|create.*order|book flight)",
+        "pip.*", "\\bpip\\b",
+    ]
+    SPECIFIC = [
+        "deploy_staging", "run-e2e", "cases.db", "release_notes.py", "auth/",
+        "invoice_ledger|billing/page/invoice",
+        "npm test|unittest",
+        "pytest.{0,40}(spawn|fail|lỗi|rtk)",
+        "(run-e2e|(create|book).{0,12}order.{0,40}(staging|test|e2e|[0-9]{8,}))",
+        "*",
+    ]
+
+    def test_lint_rejects_keyword_patterns_and_accepts_situation_patterns(self):
+        for pattern in self.LOOSE:
+            self.assertIsNotNone(lint_pattern(pattern), pattern)
+        for pattern in self.SPECIFIC:
+            self.assertIsNone(lint_pattern(pattern), pattern)
+
+    def test_one_loose_alternative_is_enough_to_reject(self):
+        self.assertIsNotNone(lint_pattern("deploy_staging|helm"))
+
+    def test_add_fact_rejects_loose_pattern_unless_forced_or_exempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            with self.assertRaisesRegex(ValueError, "too loose"):
+                engine.add_fact("pytest", "run with -q")
+            self.assertEqual(engine.list_facts(), [])
+            engine.add_fact("pytest", "run with -q", force=True)
+            engine.add_fact("pip", "use uv pip", category="auto-learned", fact_id="auto_pip")
+            self.assertEqual(len(engine.list_facts()), 2)
+
+    def test_add_fact_rejects_overlong_fact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            with self.assertRaisesRegex(ValueError, "max"):
+                engine.add_fact("deploy_staging", "x" * (MAX_FACT_CHARS + 1))
+            engine.add_fact("deploy_staging", "x" * MAX_FACT_CHARS)
+
+    def test_saved_wildcards_are_bounded_tighter_than_match_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            entry = engine.add_fact("pytest.*(fail|error)", "use -q")
+            self.assertEqual(entry["pattern"], "pytest.{0,40}(fail|error)")
+
+    def test_auto_learn_skips_pasted_command_chains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            long_ok = "pip install " + " ".join(f"pkg{i}" for i in range(60))
+            self.assertIsNone(engine.auto_learn_from_recovery("pip list", long_ok))
+            self.assertEqual(engine.list_facts(), [])
+
+    def test_specificity_cases_from_the_qc_repo(self):
+        """Prompts the old keyword patterns wrongly fired on must not match the tightened ones."""
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            engine.add_fact(
+                "(run-e2e|(create|book).{0,12}order.{0,40}(staging|test|e2e|[0-9]{8,}|stops))",
+                "Use scripts/run-e2e.py", fact_id="order",
+            )
+            for prompt in ("what is an order", "run the login test case on mobile", "what is rtk"):
+                self.assertEqual(engine.match(prompt, record_hits=False), [], prompt)
+            for prompt in ("create order on staging for customer 5551234567", "book order with 2 stops"):
+                self.assertEqual(len(engine.match(prompt, record_hits=False)), 1, prompt)
 
 
 if __name__ == "__main__":

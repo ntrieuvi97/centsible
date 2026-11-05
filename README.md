@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.5.1](https://img.shields.io/badge/Version-0.5.1-orange.svg)](#)
+[![Version: 0.6.0](https://img.shields.io/badge/Version-0.6.0-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -48,9 +48,12 @@ centsible status
 centsible stats [--all] [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--since 2026-11-04] [--no-baseline]   # baseline auto-detects this repo's transcripts
 
 # Manage micro-facts and architectural gotchas
-centsible facts add --pattern "pytest" --fact "Run with 'pytest tests/ -q --tb=short'"
+centsible facts add --pattern "pytest.{0,40}(fail|error|spawn)" --fact "Run with 'pytest tests/ -q --tb=short'"
 centsible facts add --pattern "auth/" --fact "Never mutate token keys directly" --category gotcha
-centsible facts add --pattern "rtk" --fact "Prefix shell commands with rtk" --global   # applies to every repo
+centsible facts add --pattern "rtk.{0,20}pytest" --fact "Prefix shell commands with rtk" --global   # applies to every repo
+# Saving is strict: a lone short keyword ("pytest", "rtk", "helm") or only generic words ("run.*test") is
+# rejected because it would fire on unrelated prompts; facts over 240 chars are rejected too. Anchor on an
+# identifier (deploy_staging, run-e2e, a/b), a long unique word, or a tool plus a symptom. --force overrides.
 centsible facts list
 centsible facts test "How do I run tests?"
 centsible facts remove <id_or_pattern>
