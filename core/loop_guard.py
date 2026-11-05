@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.event_log import log_event
 from core.facts_engine import (
     DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
     FactsEngine,
@@ -315,6 +316,7 @@ class LoopGuard:
     def record_injected_facts(self, fact_ids: List[str]) -> None:
         """Record fact IDs injected at turn start so PreToolUse knows what agent already saw."""
         state = self._load_state()
+        log_event("prompt_inject", self.conversation_id, fact_ids=[fid for fid in fact_ids if fid])
         existing = set(state.get("injected_fact_ids", []))
         existing.update(fid for fid in fact_ids if fid)
         state["injected_fact_ids"] = sorted(existing)
@@ -386,6 +388,7 @@ class LoopGuard:
                 f"{state['consecutive_identical_count']} times consecutively without variance. "
                 "Halting turn to prevent token waste. Please redirect strategy."
             )
+            log_event("loop_stop", self.conversation_id, trigger="identical", tool=tool_name, saved_tokens=saved_tokens)
             return "ask", reason
 
         # Trigger 2: Too many consecutive errors on execution/mutating tools
@@ -413,6 +416,7 @@ class LoopGuard:
                 f"[LoopGuard Alert] {errors} consecutive failures detected. "
                 "Circuit breaker activated. Review error cause before retrying."
             )
+            log_event("loop_stop", self.conversation_id, trigger="errors", tool=tool_name, saved_tokens=saved_tokens)
             return "ask", reason
 
         # Trigger 3: PreToolUse Micro-Fact check (when prompt didn't mention the tool, and required flags are missing)
@@ -438,7 +442,12 @@ class LoopGuard:
                 is_blocking_cli_hint = bool(
                     cmd_arg and any(f.get("category", "general") not in ("rule", "gotcha") for f in uninjected)
                 )
-                return ("ask" if block_hints and is_blocking_cli_hint else "allow"), reason
+                decision = "ask" if block_hints and is_blocking_cli_hint else "allow"
+                log_event(
+                    "hint", self.conversation_id, tool=tool_name, decision=decision,
+                    fact_ids=[f.get("id") for f in uninjected if f.get("id")],
+                )
+                return decision, reason
 
         self._save_state(state)
         return "allow", None
@@ -512,6 +521,7 @@ class LoopGuard:
                         attributed_fids.add(fid)
                         engine.update_fact_attribution(fid)
                         engine.update_metrics(attributed_hits=1)
+                        log_event("applied", self.conversation_id, tool=tool_name, fact_ids=[fid])
             state["attributed_fact_ids"] = sorted(attributed_fids)
 
         history = state.get("history", [])
