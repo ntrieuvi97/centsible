@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 @pytest.fixture(autouse=True)
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("CENTSIBLE_HOME", str(tmp_path))
+    monkeypatch.undo()  # drop conftest's path patch so the real resolver honours CENTSIBLE_HOME
+    monkeypatch.setenv("CENTSIBLE_HOME", str(tmp_path))
     return tmp_path
 
 
