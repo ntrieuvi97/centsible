@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
+from core.event_log import read_events, summarize_events
 from core.facts_engine import (
     DEFAULT_USD_PER_MTOK,
     TOOL_CATEGORIES,
@@ -670,6 +671,11 @@ def main() -> int:
     stats_parser.add_argument("--all", action="store_true", help="Sum metrics across every project under ~/.centsible/projects (use when not inside a repo)")
     stats_parser.add_argument("--json", action="store_true", help="Output metrics as JSON")
 
+    events_parser = subparsers.add_parser("events", help="Summarize the hint/block/apply event log per agent and per fact")
+    events_parser.add_argument("--days", type=int, default=7, help="Look back this many days (default: 7)")
+    events_parser.add_argument("--agent", help="Only this agent id (OpenClaw session keys only)")
+    events_parser.add_argument("--json", action="store_true", help="Output the summary as JSON")
+
     config_parser = subparsers.add_parser("config", help="View or change loop guard thresholds")
     config_sub = config_parser.add_subparsers(dest="config_action")
     config_sub.add_parser("list", help="Show effective mode and thresholds")
@@ -885,6 +891,25 @@ def main() -> int:
         print("  1. In Claude Code:    Type '/centsible-harvest'")
         print("  2. In Antigravity:    Ask your agent: \"Run centsible harvest to discover golden facts\"")
         print("  3. View Raw Prompt:   Run 'centsible harvest --prompt'")
+        return 0
+
+    elif args.command == "events":
+        from datetime import timedelta
+        evs = read_events(since=datetime.utcnow() - timedelta(days=args.days))
+        if args.agent:
+            evs = [e for e in evs if e.get("agent") == args.agent]
+        summ = summarize_events(evs)
+        if args.json:
+            print(json.dumps(summ, ensure_ascii=False, indent=2))
+            return 0
+        print(f"Events in last {args.days}d: {summ['total']}")
+        for agent, counts in sorted(summ["agents"].items()):
+            print(f"• {agent}: " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+        dead = [(fid, f) for fid, f in summ["facts"].items() if f["shown"] >= 20 and f["applied"] == 0]
+        for fid, f in sorted(summ["facts"].items(), key=lambda kv: -kv[1]["shown"])[:10]:
+            print(f"  fact {fid}: shown={f['shown']} applied={f['applied']}")
+        if dead:
+            print("⚠ Shown >=20 times, never applied: " + ", ".join(fid for fid, _ in dead))
         return 0
 
     elif args.command == "stats":
