@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, estimate_tokens, get_default_facts_path
+from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
 from core.loop_guard import (
     AUTO_LEARN_ENV,
     CONFIG_KEYS,
@@ -38,6 +38,11 @@ from core.loop_guard import (
     resolve_threshold,
     save_config,
 )
+
+
+def _engine(facts_path: Optional[Path] = None) -> FactsEngine:
+    """Engine over the project facts plus the global (all-repos) facts layer."""
+    return FactsEngine(facts_path, global_path=get_global_facts_path())
 
 
 def ensure_cli_symlink() -> None:
@@ -251,7 +256,7 @@ def handle_hook_pre_invocation() -> None:
     conversation_id = payload.get("conversationId", "default")
 
     facts_path = get_default_facts_path(workspace_paths)
-    engine = FactsEngine(facts_path)
+    engine = _engine(facts_path)
     guard = LoopGuard(conversation_id)
 
     matched = engine.match(user_input, record_hits=True)
@@ -303,7 +308,7 @@ def handle_hook_pre_tool() -> None:
     conversation_id = payload.get("conversationId", "default")
     workspace_paths = payload.get("workspacePaths", [])
 
-    engine = FactsEngine(get_default_facts_path(workspace_paths))
+    engine = _engine(get_default_facts_path(workspace_paths))
     guard = LoopGuard(conversation_id)
     decision, reason = guard.check_pre_tool_use(tool_call, engine=engine)
 
@@ -331,7 +336,7 @@ def handle_hook_post_tool() -> None:
     workspace_paths = payload.get("workspacePaths", [])
     error = extract_error_from_payload(payload)
 
-    engine = FactsEngine(get_default_facts_path(workspace_paths))
+    engine = _engine(get_default_facts_path(workspace_paths))
     guard = LoopGuard(conversation_id)
     guard.record_post_tool_use(tool_call, error, engine=engine)
 
@@ -355,7 +360,7 @@ def handle_hook_claude_prompt() -> None:
     session_id = payload.get("session_id", "default")
 
     facts_path = get_default_facts_path([cwd])
-    engine = FactsEngine(facts_path)
+    engine = _engine(facts_path)
     guard = LoopGuard(session_id)
 
     matched = engine.match(user_prompt, record_hits=True)
@@ -411,7 +416,7 @@ def handle_hook_claude_pre_tool() -> None:
         "args": tool_input,
     }
 
-    engine = FactsEngine(get_default_facts_path([cwd]))
+    engine = _engine(get_default_facts_path([cwd]))
     guard = LoopGuard(session_id)
     decision, reason = guard.check_pre_tool_use(tool_call, engine=engine)
 
@@ -461,7 +466,7 @@ def handle_hook_claude_post_tool(failed: bool = False) -> None:
         "args": tool_input,
     }
 
-    engine = FactsEngine(get_default_facts_path([cwd]))
+    engine = _engine(get_default_facts_path([cwd]))
     guard = LoopGuard(session_id)
     guard.record_post_tool_use(tool_call, error, engine=engine)
 
@@ -566,10 +571,12 @@ def main() -> int:
     facts_add.add_argument("--fact", "-f", required=True, help="One-line fact to inject")
     facts_add.add_argument("--category", "-c", default="general", help="Category tag")
     facts_add.add_argument("--id", help="Optional explicit ID")
+    facts_add.add_argument("--global", dest="is_global", action="store_true", help="Store in the global facts file shared by every repo")
 
     # facts remove
     facts_del = facts_sub.add_parser("remove", help="Remove a fact by ID or pattern")
     facts_del.add_argument("target", help="Fact ID or regex pattern to remove")
+    facts_del.add_argument("--global", dest="is_global", action="store_true", help="Remove from the global facts file")
 
     # facts test
     facts_test = facts_sub.add_parser("test", help="Test fact matching against a prompt string")
@@ -691,7 +698,7 @@ def main() -> int:
         return 0
 
     # Route facts commands
-    engine = FactsEngine()
+    engine = _engine()
 
     if args.command == "facts":
         if args.facts_action == "list":
@@ -700,9 +707,13 @@ def main() -> int:
                 print("No micro-facts stored yet. Add one with 'centsible facts add --pattern ... --fact ...'")
                 return 0
             print(f"Stored Micro-Facts ({len(facts)}):")
-            print(f"Path: {engine.storage_path}\n")
+            print(f"Path: {engine.storage_path}")
+            if engine.global_path:
+                print(f"Global: {engine.global_path}")
+            print()
             for f in facts:
-                print(f"• [{f.get('id')}] (category: {f.get('category', 'general')}, hits: {f.get('hits', 0)})")
+                tag = " [global]" if f.get("_scope") == "global" else ""
+                print(f"• [{f.get('id')}]{tag} (category: {f.get('category', 'general')}, hits: {f.get('hits', 0)})")
                 print(f"  Pattern: {f.get('pattern')}")
                 print(f"  Fact:    {f.get('fact')}\n")
             return 0
@@ -713,12 +724,13 @@ def main() -> int:
                 fact=args.fact,
                 category=args.category,
                 fact_id=args.id,
+                scope="global" if args.is_global else "project",
             )
             print(f"✓ Added micro-fact [{entry['id']}]: '{entry['fact']}' (Trigger: {entry['pattern']})")
             return 0
 
         elif args.facts_action == "remove":
-            removed = engine.remove_fact(args.target)
+            removed = engine.remove_fact(args.target, scope="global" if args.is_global else "project")
             if removed:
                 print(f"✓ Removed fact matching: {args.target}")
             else:
