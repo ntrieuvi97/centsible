@@ -322,6 +322,22 @@ def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
     return False
 
 
+def is_prescribed_command_present(fact_text: str, cmd_text: str) -> bool:
+    """True when the fact quotes the exact command to run and `cmd_text` already contains all of it.
+
+    Gotcha facts fire once per session even for CLI calls, so without this a command that already follows
+    the fact (`rtk proxy python3 -m pytest tests -q`) still gets the hint and is counted as a saving.
+    Only the longest quoted command-like segment counts; facts with none keep firing as before.
+    """
+    if not fact_text or not cmd_text:
+        return False
+    _, quoted = extract_fact_prescriptions(fact_text)
+    candidates = [q for q in quoted if q.isascii() and len(q.split()) >= 2 and find_common_bin(q)]
+    if not candidates:
+        return False
+    return all(tok in cmd_text for tok in max(candidates, key=len).split())
+
+
 def check_fact_attribution(
     fact: Dict[str, Any],
     tool_call: Dict[str, Any],
@@ -999,6 +1015,8 @@ class FactsEngine:
                     if cmd_text and category not in ("rule", "gotcha"):
                         if only_missing_flags and not is_fact_missing_in_command(f.get("fact", ""), cmd_text):
                             continue
+                    elif cmd_text and only_missing_flags and is_prescribed_command_present(f.get("fact", ""), cmd_text):
+                        continue
                     matched.append(f)
                     if record_hits:
                         tok_cost = estimate_tokens(f.get("fact", "")) + 4
