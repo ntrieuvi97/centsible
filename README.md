@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.3.6](https://img.shields.io/badge/Version-0.3.6-orange.svg)](#)
+[![Version: 0.3.7](https://img.shields.io/badge/Version-0.3.7-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -50,6 +50,7 @@ centsible stats [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--si
 # Manage micro-facts and architectural gotchas
 centsible facts add --pattern "pytest" --fact "Run with 'pytest tests/ -q --tb=short'"
 centsible facts add --pattern "auth/" --fact "Never mutate token keys directly" --category gotcha
+centsible facts add --pattern "rtk" --fact "Prefix shell commands with rtk" --global   # applies to every repo
 centsible facts list
 centsible facts test "How do I run tests?"
 centsible facts remove <id_or_pattern>
@@ -84,7 +85,7 @@ centsible config set max_consecutive_errors 4
 ```
 </details>
 
-Facts live in the project's `.agents/` or `.claude/` dir when present, otherwise in `~/.centsible/projects/<repo>-<hash>/` (scoped per repo, never shared). Override the root with `CENTSIBLE_HOME`.
+Facts live in the project's `.agents/` or `.claude/` dir when present, otherwise in `~/.centsible/projects/<repo>-<hash>/` (scoped per repo, never shared). Override the root with `CENTSIBLE_HOME`. Facts added with `--global` live in `~/.centsible/facts.jsonl` and apply to every repo; a project fact with the same id or pattern wins.
 
 ---
 

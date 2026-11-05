@@ -13,7 +13,7 @@ import shlex
 import sys
 import time
 import unicodedata
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -201,6 +201,12 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
     return global_dir / "projects" / key / "facts.jsonl"
 
 
+def get_global_facts_path() -> Path:
+    """Facts that apply to every repo: ~/.centsible/facts.jsonl (or $CENTSIBLE_HOME/facts.jsonl)."""
+    env_home = os.environ.get("CENTSIBLE_HOME")
+    return (Path(env_home).expanduser().resolve() if env_home else Path.home() / ".centsible") / "facts.jsonl"
+
+
 COMMON_BINS = {
     # Python
     "pytest", "uv", "poetry", "ruff", "mypy", "pip", "flake8", "black", "alembic", "tox",
@@ -357,20 +363,20 @@ def _facts_locked(fn):
     """Serialize a FactsEngine read-modify-write on facts.jsonl across hook processes."""
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        with file_lock(self.storage_path):
+        with ExitStack() as stack:  # fixed order (project, then global) so processes never deadlock
+            for path in (self.storage_path, self.global_path):
+                if path:
+                    stack.enter_context(file_lock(path))
             return fn(self, *args, **kwargs)
     return wrapper
 
 
 class FactsEngine:
-    def __init__(self, storage_path: Optional[Path] = None):
+    def __init__(self, storage_path: Optional[Path] = None, global_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
+        # Optional second layer shared by all repos; a project fact with the same id/pattern wins.
+        self.global_path = global_path if global_path != self.storage_path else None
         self.metrics_path = self.storage_path.parent / "metrics.json"
-
-    def _ensure_storage(self) -> None:
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.storage_path.exists():
-            self.storage_path.touch()
 
     def load_metrics(self) -> Dict[str, int]:
         """Load repository-level token and execution telemetry."""
@@ -458,25 +464,39 @@ class FactsEngine:
             "usd_per_mtok": usd_per_mtok,
         }
 
-    def list_facts(self, category: Optional[str] = None) -> List[Dict]:
-        """Read all facts from disk."""
-        if not self.storage_path.exists():
+    @staticmethod
+    def _read(path: Optional[Path]) -> List[Dict]:
+        """Raw facts of one file; unreadable lines are skipped."""
+        if not path or not path.exists():
             return []
-
         facts = []
-        with open(self.storage_path, "r", encoding="utf-8") as f:
-            for line_no, line in enumerate(f, start=1):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 try:
-                    item = json.loads(line)
-                    if category and item.get("category") != category:
-                        continue
-                    facts.append(item)
+                    facts.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
         return facts
+
+    def list_facts(self, category: Optional[str] = None, scope: Optional[str] = None) -> List[Dict]:
+        """Facts from disk. scope='project'|'global' reads one file raw; default is the merged view
+        (project + global, global ones tagged `_scope: global` and dropped when a project fact overrides them)."""
+        if scope == "global":
+            facts = self._read(self.global_path)
+        elif scope == "project":
+            facts = self._read(self.storage_path)
+        else:
+            facts = self._read(self.storage_path)
+            ids = {f.get("id") for f in facts}
+            pats = {f.get("pattern") for f in facts}
+            facts += [
+                dict(g, _scope="global") for g in self._read(self.global_path)
+                if g.get("id") not in ids and g.get("pattern") not in pats
+            ]
+        return [f for f in facts if not category or f.get("category") == category]
 
     @_facts_locked
     def add_fact(
@@ -486,9 +506,12 @@ class FactsEngine:
         category: str = "general",
         fact_id: Optional[str] = None,
         est_savings: int = DEFAULT_SAVED_TOKENS_PER_HIT,
+        scope: str = "project",
     ) -> Dict:
-        """Add or update a micro-fact."""
-        self._ensure_storage()
+        """Add or update a micro-fact in the project file, or the global one with scope='global'."""
+        path = self._scope_path(scope)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
 
         if len(pattern) > 500:
             raise ValueError("Regex pattern is too long (maximum 500 characters).")
@@ -524,7 +547,7 @@ class FactsEngine:
             "updated_at": datetime.utcnow().isoformat() + "Z",
         }
 
-        facts = self.list_facts()
+        facts = self._read(path)
         updated = False
         for i, existing in enumerate(facts):
             if existing.get("id") == fact_id or existing.get("pattern") == pattern:
@@ -539,20 +562,21 @@ class FactsEngine:
         if not updated:
             facts.append(new_entry)
 
-        self._save_all(facts)
+        self._write(path, facts)
         return new_entry
 
     @_facts_locked
-    def remove_fact(self, fact_id_or_pattern: str) -> bool:
-        """Remove a fact by ID or pattern."""
-        facts = self.list_facts()
+    def remove_fact(self, fact_id_or_pattern: str, scope: str = "project") -> bool:
+        """Remove a fact by ID or pattern from the project file (or the global one with scope='global')."""
+        path = self._scope_path(scope)
+        facts = self._read(path)
         initial_len = len(facts)
         facts = [
             f for f in facts
             if f.get("id") != fact_id_or_pattern and f.get("pattern") != fact_id_or_pattern
         ]
         if len(facts) < initial_len:
-            self._save_all(facts)
+            self._write(path, facts)
             return True
         return False
 
@@ -591,7 +615,7 @@ class FactsEngine:
 
         if needs_save and record_hits:
             header_tokens = 24  # "[CENTSIBLE MICRO-SKILLS...]" header overhead
-            self._save_all(facts)
+            self._save_merged(facts)
             self.update_metrics(
                 prompt_injections=1,
                 fact_hits=len(matched),
@@ -670,7 +694,7 @@ class FactsEngine:
                 continue
 
         if needs_save and record_hits:
-            self._save_all(facts)
+            self._save_merged(facts)
             self.update_metrics(
                 fact_hits=len(matched),
                 tool_hint_hits=len(matched),
@@ -771,5 +795,22 @@ class FactsEngine:
 
         return "\n".join(lines)
 
-    def _save_all(self, facts: List[Dict]) -> None:
-        atomic_write_text(self.storage_path, "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts))
+    def _scope_path(self, scope: str) -> Path:
+        if scope == "global":
+            if not self.global_path:
+                raise ValueError("No global facts file configured for this engine.")
+            return self.global_path
+        return self.storage_path
+
+    @staticmethod
+    def _write(path: Path, facts: List[Dict]) -> None:
+        atomic_write_text(path, "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts))
+
+    def _save_merged(self, facts: List[Dict]) -> None:
+        """Persist a merged view (callers hold both locks): project facts to the project file, global ones
+        back into the global file by id, so global entries overridden by a project fact are left alone."""
+        strip = lambda f: {k: v for k, v in f.items() if k != "_scope"}
+        self._write(self.storage_path, [strip(f) for f in facts if f.get("_scope") != "global"])
+        updated = {f.get("id"): strip(f) for f in facts if f.get("_scope") == "global"}
+        if updated and self.global_path:
+            self._write(self.global_path, [updated.get(g.get("id"), g) for g in self._read(self.global_path)])

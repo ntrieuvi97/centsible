@@ -247,5 +247,47 @@ class TestFactsEngine(unittest.TestCase):
         self.assertEqual(hit("jestify"), [])
 
 
+class TestGlobalFacts(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        d = Path(self.tmp.name)
+        self.engine = FactsEngine(d / "proj" / "facts.jsonl", global_path=d / "glob" / "facts.jsonl")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_global_fact_visible_in_every_project_but_stored_once(self):
+        self.engine.add_fact("rtk", "prefix shell with rtk", fact_id="g1", scope="global")
+        other = FactsEngine(Path(self.tmp.name) / "other" / "facts.jsonl", global_path=self.engine.global_path)
+        self.assertEqual([f["id"] for f in other.match("use rtk here", record_hits=False)], ["g1"])
+        self.assertEqual(self.engine.list_facts(scope="project"), [])  # never copied into the project file
+
+    def test_project_fact_overrides_global_with_same_pattern(self):
+        self.engine.add_fact("pytest", "global way", fact_id="g", scope="global")
+        self.engine.add_fact("pytest", "project way", fact_id="p")
+        self.assertEqual([f["fact"] for f in self.engine.match("run pytest", record_hits=False)], ["project way"])
+
+    def test_hits_persist_to_global_file_and_overridden_global_survives(self):
+        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global")
+        self.engine.add_fact("pytest", "global pytest", fact_id="g2", scope="global")
+        self.engine.add_fact("pytest", "project pytest", fact_id="p")
+        self.engine.match("rtk and pytest")  # records hits for g1 (global) and p (project)
+        glob = {f["id"]: f for f in self.engine.list_facts(scope="global")}
+        self.assertEqual(glob["g1"]["hits"], 1)
+        self.assertIn("g2", glob)  # shadowed by project fact but must not be deleted
+        self.assertEqual(self.engine.list_facts(scope="project")[0]["hits"], 1)
+        self.assertNotIn("_scope", self.engine.list_facts(scope="global")[0])
+
+    def test_remove_is_scoped(self):
+        self.engine.add_fact("rtk", "use rtk", fact_id="g1", scope="global")
+        self.assertFalse(self.engine.remove_fact("g1"))  # project scope by default
+        self.assertTrue(self.engine.remove_fact("g1", scope="global"))
+
+    def test_global_scope_without_global_file_is_an_error(self):
+        solo = FactsEngine(Path(self.tmp.name) / "solo" / "facts.jsonl")
+        with self.assertRaises(ValueError):
+            solo.add_fact("x", "y", scope="global")
+
+
 if __name__ == "__main__":
     unittest.main()
