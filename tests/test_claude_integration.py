@@ -64,6 +64,7 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         output = json.loads(res.stdout)
         self.assertIn("hookSpecificOutput", output)
+        self.assertEqual(output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit")
         self.assertIn("additionalContext", output["hookSpecificOutput"])
         self.assertIn("Use docker compose v2 commands", output["hookSpecificOutput"]["additionalContext"])
 
