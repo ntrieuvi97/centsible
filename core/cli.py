@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, debug_warn, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
+from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, debug_warn, derive_summary, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
 from core.loop_guard import (
     AUTO_LEARN_ENV,
     CONFIG_KEYS,
@@ -43,6 +43,29 @@ from core.loop_guard import (
 def _engine(facts_path: Optional[Path] = None) -> FactsEngine:
     """Engine over the project facts plus the global (all-repos) facts layer."""
     return FactsEngine(facts_path, global_path=get_global_facts_path())
+
+
+def _summary_all_projects(rate: float) -> Dict[str, Any]:
+    """Sum every project's summary plus the legacy global bucket (~/.centsible/metrics.json)."""
+    gpath = get_global_facts_path()
+    paths = [gpath, *sorted((gpath.parent / "projects").glob("*/facts.jsonl"))]
+    # Count only dirs that hold data; a project dir may have metrics.json without facts.jsonl yet
+    paths += [p for p in sorted((gpath.parent / "projects").glob("*/metrics.json")) if p.with_name("facts.jsonl") not in paths]
+    total: Dict[str, Any] = {}
+    for path in paths:
+        s = FactsEngine(path.with_name("facts.jsonl")).get_metrics_summary(usd_per_mtok=rate)
+        for k, v in s.items():
+            if isinstance(v, int) and not isinstance(v, bool) and k in _SUM_KEYS:
+                total[k] = total.get(k, 0) + v
+    total["projects"] = len(paths)
+    return derive_summary({k: total.get(k, 0) for k in _SUM_KEYS} | {"projects": len(paths)}, rate)
+
+
+_SUM_KEYS = (
+    "prompt_injections", "fact_hits", "tool_hint_hits", "injected_tokens", "saved_discovery_tokens",
+    "loop_interventions", "saved_loop_tokens", "tool_calls_total", "tool_calls_failed",
+    "first_try_successes", "auto_learned_facts", "total_facts",
+)
 
 
 def _read_payload() -> Dict[str, Any]:
@@ -572,6 +595,7 @@ def main() -> int:
     stats_parser.add_argument("--baseline", nargs="?", const="auto", default="auto", help="Dir of session transcripts (.jsonl) to compare exploration cost before vs after --since (default: this repo's Claude Code transcripts, skipped if none)")
     stats_parser.add_argument("--no-baseline", action="store_true", help="Skip the before/after exploration comparison")
     stats_parser.add_argument("--since", help="ISO date/datetime splitting before/after (default: earliest fact created_at)")
+    stats_parser.add_argument("--all", action="store_true", help="Sum metrics across every project under ~/.centsible/projects (use when not inside a repo)")
     stats_parser.add_argument("--json", action="store_true", help="Output metrics as JSON")
 
     config_parser = subparsers.add_parser("config", help="View or change loop guard thresholds")
@@ -772,7 +796,11 @@ def main() -> int:
         return 0
 
     elif args.command == "stats":
-        summary = engine.get_metrics_summary(usd_per_mtok=args.rate)
+        if args.all:
+            summary = _summary_all_projects(args.rate)
+            args.no_baseline = True
+        else:
+            summary = engine.get_metrics_summary(usd_per_mtok=args.rate)
         transcript_report = analyze_transcript(Path(args.transcript)) if args.transcript else None
         baseline_report = None
         auto = args.baseline == "auto"
@@ -803,7 +831,7 @@ def main() -> int:
             return 0
 
         print("=== Centsible Efficiency & ROI Report 🪙⚡ ===")
-        print(f"• Storage Path:         {engine.storage_path}")
+        print(f"• Storage Path:         {'all projects (' + str(summary['projects']) + ')' if args.all else engine.storage_path}")
         print(f"• Active Micro-Facts:   {summary['total_facts']} (Auto-learned: {summary['auto_learned_facts']})")
         print(f"• Total Fact Hits:      {summary['fact_hits']} (Prompt: {summary['prompt_injections']}, Pre-Tool Hints: {summary['tool_hint_hits']})")
         print(f"• Loop Interventions:   {summary['loop_interventions']} halted runaway loops")
@@ -814,6 +842,8 @@ def main() -> int:
         print(f"• Ephemeral Overhead:   -{summary['injected_tokens']:,} tokens")
         print(f"• Net Tokens Saved:     {summary['net_saved_tokens']:,} tokens (ROI: {summary['roi_multiplier']}x)")
         print(f"• Estimated Savings:    {summary['saved_cents']:.2f}¢ (${summary['saved_usd']:.4f} @ ${args.rate:.2f}/1M tok)")
+        if not args.all and not summary["total_facts"] and not summary["tool_calls_total"]:
+            print("ℹ No data for this directory (stats are per-project). cd into a repo, or run 'centsible stats --all'.")
 
         if transcript_report:
             print("--- Session Transcript Analysis ---")

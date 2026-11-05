@@ -189,6 +189,16 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn("=== Centsible Efficiency & ROI Report", res.stdout)
 
+    def test_stats_all_sums_projects(self):
+        import json as _json
+        for name, calls in (("a-1", 3), ("b-2", 4)):
+            d = Path(self.temp_dir.name) / "projects" / name
+            d.mkdir(parents=True)
+            (d / "metrics.json").write_text(_json.dumps({"tool_calls_total": calls, "first_try_successes": calls}))
+        res = self._run_te(["stats", "--all", "--json"])
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(_json.loads(res.stdout)["metrics"]["tool_calls_total"], 7)
+
     def test_stats_and_transcript_analysis(self):
         # 1. Seed a fact and trigger a hit
         self._run_te([
