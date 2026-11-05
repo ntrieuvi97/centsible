@@ -83,6 +83,29 @@ class TestClaudeIntegration(unittest.TestCase):
         output = json.loads(res.stdout)
         self.assertEqual(output, {})
 
+    def test_claude_cli_hint_does_not_block_the_command(self):
+        self._run_te(["facts", "add", "--pattern", "bruno", "--fact", "Append --condense to bruno commands", "--id", "f-bruno"])
+        sid = f"claude_hint_{id(self)}"
+        payload = json.dumps({
+            "tool_name": "Bash",
+            "tool_input": {"command": "bruno run suite"},
+            "cwd": self.temp_dir.name,
+            "session_id": sid,
+        })
+        res = self._run_te(["hook", "claude-pre-tool"], payload)
+        get_state_path(sid).unlink(missing_ok=True)
+        self.assertEqual(res.returncode, 0)  # used to be exit 2, which cancelled the command
+        out = json.loads(res.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["permissionDecision"], "allow")
+        self.assertIn("--condense", out["additionalContext"])
+
+    def test_malformed_hook_payload_is_silent_unless_debug(self):
+        quiet = self._run_te(["hook", "claude-post-tool"], "{not json")
+        self.assertEqual((quiet.returncode, json.loads(quiet.stdout), quiet.stderr), (0, {}, ""))
+        loud = self._run_te(["hook", "claude-post-tool"], "{not json", env={"CENTSIBLE_DEBUG": "1"})
+        self.assertEqual(loud.returncode, 0)
+        self.assertIn("[centsible:debug] hook payload", loud.stderr)
+
     def test_claude_pre_tool_loop_guard_exit_code_2(self):
         claude_tool_call = {
             "hook_event_name": "PreToolUse",

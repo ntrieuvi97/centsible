@@ -19,7 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core import __version__
-from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
+from core.facts_engine import DEFAULT_USD_PER_MTOK, FactsEngine, debug_warn, detect_user_correction, estimate_tokens, get_default_facts_path, get_global_facts_path
 from core.loop_guard import (
     AUTO_LEARN_ENV,
     CONFIG_KEYS,
@@ -45,6 +45,21 @@ def _engine(facts_path: Optional[Path] = None) -> FactsEngine:
     return FactsEngine(facts_path, global_path=get_global_facts_path())
 
 
+def _read_payload() -> Dict[str, Any]:
+    """Hook JSON from stdin; empty or malformed input degrades to {} (a hook must never crash the agent)."""
+    try:
+        raw = sys.stdin.read()
+        return json.loads(raw) if raw.strip() else {}
+    except Exception as e:
+        debug_warn("hook payload", e)
+        return {}
+
+
+def _emit(obj: Dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
 def ensure_cli_symlink() -> None:
     """Ensure ~/.local/bin/centsible symlink points to a valid binary so CLI works out-of-the-box."""
     try:
@@ -59,8 +74,8 @@ def ensure_cli_symlink() -> None:
             if link_path.is_symlink():
                 link_path.unlink()
             link_path.symlink_to(target_bin)
-    except Exception:
-        pass
+    except Exception as e:
+        debug_warn("ensure_cli_symlink", e)
 
 
 def _blocks(step: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -245,11 +260,7 @@ def handle_hook_pre_invocation() -> None:
     Antigravity Hook: PreInvocation.
     Reads input context from stdin, matches facts, and outputs ephemeral injection.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     user_input = payload.get("lastUserInput", "")
     workspace_paths = payload.get("workspacePaths", [])
@@ -289,8 +300,7 @@ def handle_hook_pre_invocation() -> None:
             ]
         }
 
-    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit(output)
 
 
 def handle_hook_pre_tool() -> None:
@@ -298,11 +308,7 @@ def handle_hook_pre_tool() -> None:
     Antigravity Hook: PreToolUse.
     Checks loop guard and uninjected tool micro-facts.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     tool_call = payload.get("toolCall", {})
     conversation_id = payload.get("conversationId", "default")
@@ -310,14 +316,13 @@ def handle_hook_pre_tool() -> None:
 
     engine = _engine(get_default_facts_path(workspace_paths))
     guard = LoopGuard(conversation_id)
-    decision, reason = guard.check_pre_tool_use(tool_call, engine=engine)
+    decision, reason = guard.check_pre_tool_use(tool_call, engine=engine, block_hints=True)
 
     response: Dict[str, Any] = {"decision": decision}
     if reason:
         response["reason"] = reason
 
-    sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit(response)
 
 
 def handle_hook_post_tool() -> None:
@@ -325,11 +330,7 @@ def handle_hook_post_tool() -> None:
     Antigravity Hook: PostToolUse.
     Records tool outcome to detect failure streaks and auto-learn recoveries.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     tool_call = payload.get("toolCall", {})
     conversation_id = payload.get("conversationId", "default")
@@ -340,8 +341,7 @@ def handle_hook_post_tool() -> None:
     guard = LoopGuard(conversation_id)
     guard.record_post_tool_use(tool_call, error, engine=engine)
 
-    sys.stdout.write(json.dumps({}, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit({})
 
 
 def handle_hook_claude_prompt() -> None:
@@ -349,11 +349,7 @@ def handle_hook_claude_prompt() -> None:
     Claude Code Hook: UserPromptSubmit.
     Reads prompt and cwd from stdin, outputs additionalContext.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     user_prompt = payload.get("prompt", "")
     cwd = payload.get("cwd") or str(Path.cwd())
@@ -391,8 +387,7 @@ def handle_hook_claude_prompt() -> None:
             }
         }
 
-    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit(output)
 
 
 def handle_hook_claude_pre_tool() -> None:
@@ -400,11 +395,7 @@ def handle_hook_claude_pre_tool() -> None:
     Claude Code Hook: PreToolUse.
     Checks LoopGuard and uninjected tool facts; exits 2 if blocked, exits 0 with additionalContext if allowed.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {})
@@ -435,8 +426,7 @@ def handle_hook_claude_pre_tool() -> None:
                 "additionalContext": reason,
             }
         }
-        sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        _emit(output)
 
     sys.exit(0)
 
@@ -447,11 +437,7 @@ def handle_hook_claude_post_tool(failed: bool = False) -> None:
     Records tool outcome to track failure streaks and auto-learn recoveries.
     Claude Code only fires PostToolUse on success, so failures arrive via PostToolUseFailure.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input", {})
@@ -470,8 +456,7 @@ def handle_hook_claude_post_tool(failed: bool = False) -> None:
     guard = LoopGuard(session_id)
     guard.record_post_tool_use(tool_call, error, engine=engine)
 
-    sys.stdout.write(json.dumps({}, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit({})
 
 
 def handle_hook_stop() -> None:
@@ -480,17 +465,12 @@ def handle_hook_stop() -> None:
     When the turn completes normally, check if the session uncovered gotchas or new patterns,
     and nudge the agent once to persist them via facts add before closing.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     termination_reason = payload.get("terminationReason", "NO_TOOL_CALL")
     # Only nudge on clean/normal completions (NO_TOOL_CALL). Never block user cancellation, limits, or errors.
     if termination_reason != "NO_TOOL_CALL":
-        sys.stdout.write(json.dumps({}, ensure_ascii=False) + "\n")
-        sys.stdout.flush()
+        _emit({})
         return
 
     conversation_id = payload.get("conversationId", "default")
@@ -504,8 +484,7 @@ def handle_hook_stop() -> None:
             "reason": nudge_msg,
         }
 
-    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit(output)
 
 
 def handle_hook_claude_stop() -> None:
@@ -513,11 +492,7 @@ def handle_hook_claude_stop() -> None:
     Claude Code Hook: Stop. If the agent hit repeated tool failures or completed significant activity this session,
     block the stop once so it can persist any gotchas or golden facts discovered.
     """
-    try:
-        raw_input = sys.stdin.read()
-        payload: Dict[str, Any] = json.loads(raw_input) if raw_input.strip() else {}
-    except Exception:
-        payload = {}
+    payload = _read_payload()
 
     output: Dict[str, Any] = {}
     # stop_hook_active: we already forced a continuation this stop cycle; never loop.
@@ -530,8 +505,7 @@ def handle_hook_claude_stop() -> None:
                 "reason": nudge_msg,
             }
 
-    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _emit(output)
 
 
 def main() -> int:
