@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, atomic_write_text, file_lock, find_common_bin
+from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, atomic_write_text, debug_warn, file_lock, find_common_bin
 
 STOP_NUDGE_MIN_FAILURES = 2  # tool failures before the Stop hook asks the agent for gotchas
 RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
@@ -83,7 +83,10 @@ def load_config() -> Dict[str, Any]:
     try:
         data = json.loads(get_config_path().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        debug_warn("load_config", e)
         return {}
 
 
@@ -192,7 +195,8 @@ def get_state_path(conversation_id: Optional[str]) -> Path:
     te_dir = Path(tempfile.gettempdir()) / f"te_{uid}"
     try:
         te_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except Exception:
+    except Exception as e:
+        debug_warn("get_state_path", e)
         te_dir = Path(tempfile.gettempdir())
     return te_dir / f"loop_guard_{safe_id}.json"
 
@@ -246,14 +250,15 @@ class LoopGuard:
                 for k, v in defaults.items():
                     data.setdefault(k, v)
                 return data
-        except Exception:
+        except Exception as e:
+            debug_warn("LoopGuard._load_state (state reset, loop guard history lost)", e)
             return self._default_state()
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         try:
             atomic_write_text(self.state_path, json.dumps(state, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as e:
+            debug_warn("LoopGuard._save_state", e)
 
     @_state_locked
     def record_injected_facts(self, fact_ids: List[str]) -> None:
@@ -282,11 +287,14 @@ class LoopGuard:
         self,
         tool_call: Dict[str, Any],
         engine: Optional[FactsEngine] = None,
+        block_hints: bool = False,
     ) -> Tuple[str, Optional[str]]:
         """
         Check before a tool executes.
         Returns (decision, reason).
         decision is 'allow', 'ask', or 'deny'.
+        A micro-fact hint on a CLI command is 'allow' + reason (the host injects it as context and the command
+        still runs); only hosts that cannot inject context pass block_hints=True to get 'ask' instead.
         """
         tool_name = tool_call.get("name", "")
         args = tool_call.get("args", {})
@@ -358,7 +366,7 @@ class LoopGuard:
                 is_blocking_cli_hint = bool(
                     cmd_arg and any(f.get("category", "general") not in ("rule", "gotcha") for f in uninjected)
                 )
-                return ("ask" if is_blocking_cli_hint else "allow"), reason
+                return ("ask" if block_hints and is_blocking_cli_hint else "allow"), reason
 
         self._save_state(state)
         return "allow", None
@@ -498,5 +506,5 @@ class LoopGuard:
         if self.state_path.exists():
             try:
                 self.state_path.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                debug_warn("LoopGuard.reset", e)

@@ -203,10 +203,18 @@ class TestLoopGuard(unittest.TestCase):
 
             # Agent calls bruno without --compact when prompt did not inject f-bruno
             call_missing = {"name": "run_command", "args": {"CommandLine": "bruno run suite"}}
+            # Default (Claude Code): hint rides along as context, the command still runs
             decision, reason = self.guard.check_pre_tool_use(call_missing, engine=engine)
-            self.assertEqual(decision, "ask")
+            self.assertEqual(decision, "allow")
             self.assertIn("[Centsible Micro-Skill Hint]", reason)
             self.assertIn("--compact", reason)
+
+            # Hosts that cannot inject context (Antigravity) opt in to blocking
+            fresh = LoopGuard("hint-block")
+            fresh.reset()  # state lives in the system temp dir and survives between runs
+            self.addCleanup(fresh.reset)
+            decision_b, _ = fresh.check_pre_tool_use(call_missing, engine=engine, block_hints=True)
+            self.assertEqual(decision_b, "ask")
 
             # File/module gotcha returns 'allow' with hint (smooth injection without blocking Edit/Read)
             engine.add_fact(

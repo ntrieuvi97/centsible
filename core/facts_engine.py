@@ -71,6 +71,12 @@ def bound_wildcards(pattern: str, span: int = WILDCARD_SPAN) -> str:
     return "".join(out)
 
 
+def debug_warn(where: str, exc: BaseException) -> None:
+    """Hooks must never break the agent, so failures are swallowed; set CENTSIBLE_DEBUG=1 to see them on stderr."""
+    if os.environ.get("CENTSIBLE_DEBUG"):
+        sys.stderr.write(f"[centsible:debug] {where}: {type(exc).__name__}: {exc}\n")
+
+
 @contextmanager
 def file_lock(path: Path):
     """Exclusive cross-process lock around read-modify-write of `path` (sidecar `<name>.lock`).
@@ -168,15 +174,15 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
                 ws_path = Path(ws).resolve()
                 if ws_path.is_dir():
                     candidates.append(ws_path)
-            except Exception:
-                continue
+            except Exception as e:
+                debug_warn("get_default_facts_path(workspace)", e)
 
     try:
         cwd_path = Path.cwd().resolve()
         if cwd_path not in candidates:
             candidates.append(cwd_path)
-    except Exception:
-        pass
+    except Exception as e:
+        debug_warn("get_default_facts_path(cwd)", e)
 
     # 1. Project-local directory (.agents/ or .claude/ or root facts.jsonl)
     home = Path.home().resolve()
@@ -401,7 +407,8 @@ class FactsEngine:
                 for k, v in defaults.items():
                     data.setdefault(k, v)
                 return data
-        except Exception:
+        except Exception as e:
+            debug_warn("load_metrics", e)
             return defaults
 
     def update_metrics(self, **deltas: int) -> Dict[str, int]:
@@ -414,8 +421,8 @@ class FactsEngine:
                     metrics[k] = metrics.get(k, 0) + int(delta)
             try:
                 atomic_write_text(self.metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2))
-            except Exception:
-                pass
+            except Exception as e:
+                debug_warn("update_metrics", e)
         return metrics
 
     def get_metrics_summary(self, usd_per_mtok: float = DEFAULT_USD_PER_MTOK) -> Dict[str, Any]:
