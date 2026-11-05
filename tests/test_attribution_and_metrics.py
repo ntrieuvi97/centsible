@@ -157,13 +157,47 @@ class TestAttributionAndMetrics(unittest.TestCase):
     def test_jit_inject_mode_configuration(self):
         from core.loop_guard import resolve_inject_mode
         from unittest import mock
-        # Default is jit
-        self.assertEqual(resolve_inject_mode(), "jit")
+        # Default is smart hybrid
+        self.assertEqual(resolve_inject_mode(), "smart")
         # Can be overridden via env
+        with mock.patch.dict("os.environ", {"CENTSIBLE_INJECT_MODE": "jit"}):
+            self.assertEqual(resolve_inject_mode(), "jit")
         with mock.patch.dict("os.environ", {"CENTSIBLE_INJECT_MODE": "eager"}):
             self.assertEqual(resolve_inject_mode(), "eager")
         with mock.patch.dict("os.environ", {"CENTSIBLE_INJECT_MODE": "off"}):
             self.assertEqual(resolve_inject_mode(), "off")
+
+    def test_smart_hybrid_domain_matching_and_capping(self):
+        from core.facts_engine import TOOL_CATEGORIES
+        # Add 5 domain facts and 1 tool fact, all matching prompt 'order'
+        for i in range(5):
+            self.engine.add_fact(
+                pattern=f"order_{i}|order",
+                fact=f"Domain business rule number {i} for orders",
+                category="database",
+                fact_id=f"domain_{i}",
+            )
+        self.engine.add_fact(
+            pattern="order_tool|order",
+            fact="Run order tool with --verbose",
+            category="tool",
+            fact_id="tool_fact",
+        )
+
+        # In smart hybrid mode: TOOL_CATEGORIES are excluded, max_facts=3
+        matched = self.engine.match(
+            "check order status",
+            record_hits=True,
+            max_facts=3,
+            exclude_categories=TOOL_CATEGORIES,
+        )
+
+        # 1. Total matched must be capped at 3
+        self.assertEqual(len(matched), 3)
+        # 2. Tool fact must NOT be in prompt injection
+        self.assertNotIn("tool_fact", [f["id"] for f in matched])
+        # 3. All returned are domain database facts
+        self.assertTrue(all(f["category"] == "database" for f in matched))
 
 
 if __name__ == "__main__":
