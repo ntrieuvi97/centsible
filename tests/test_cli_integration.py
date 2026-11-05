@@ -199,6 +199,17 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertEqual(_json.loads(res.stdout)["metrics"]["tool_calls_total"], 7)
 
+    def test_stats_all_does_not_double_count_migrated_facts(self):
+        import json as _json
+        home = Path(self.temp_dir.name)
+        (home / "metrics.json").write_text(_json.dumps({"fact_hits": 10, "saved_discovery_tokens": 15000, "tool_calls_total": 5}))
+        d = home / "projects" / "a-1"
+        d.mkdir(parents=True)
+        (d / "metrics.json").write_text(_json.dumps({"tool_calls_total": 2}))
+        (d / "facts.jsonl").write_text(_json.dumps({"id": "f1", "fact": "x", "hits": 10, "saved_tokens": 15000}) + "\n")
+        m = _json.loads(self._run_te(["stats", "--all", "--json"]).stdout)["metrics"]
+        self.assertEqual((m["fact_hits"], m["saved_discovery_tokens"], m["tool_calls_total"]), (10, 15000, 7))
+
     def test_stats_and_transcript_analysis(self):
         # 1. Seed a fact and trigger a hit
         self._run_te([

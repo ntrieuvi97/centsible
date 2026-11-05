@@ -45,20 +45,26 @@ def _engine(facts_path: Optional[Path] = None) -> FactsEngine:
     return FactsEngine(facts_path, global_path=get_global_facts_path())
 
 
+# Counters that also derive from per-fact hits: facts migrated from the global file into a project
+# carry their hits, so the legacy global metrics.json already includes them. Never add the two.
+_FACT_KEYS = ("fact_hits", "injected_tokens", "saved_discovery_tokens", "auto_learned_facts")
+
+
 def _summary_all_projects(rate: float) -> Dict[str, Any]:
-    """Sum every project's summary plus the legacy global bucket (~/.centsible/metrics.json)."""
+    """Sum every project's summary, then fold in the legacy global bucket (~/.centsible/metrics.json)."""
     gpath = get_global_facts_path()
-    paths = [gpath, *sorted((gpath.parent / "projects").glob("*/facts.jsonl"))]
-    # Count only dirs that hold data; a project dir may have metrics.json without facts.jsonl yet
-    paths += [p for p in sorted((gpath.parent / "projects").glob("*/metrics.json")) if p.with_name("facts.jsonl") not in paths]
-    total: Dict[str, Any] = {}
-    for path in paths:
-        s = FactsEngine(path.with_name("facts.jsonl")).get_metrics_summary(usd_per_mtok=rate)
-        for k, v in s.items():
-            if isinstance(v, int) and not isinstance(v, bool) and k in _SUM_KEYS:
-                total[k] = total.get(k, 0) + v
-    total["projects"] = len(paths)
-    return derive_summary({k: total.get(k, 0) for k in _SUM_KEYS} | {"projects": len(paths)}, rate)
+    dirs = sorted(d for d in (gpath.parent / "projects").glob("*") if d.is_dir())
+    total = dict.fromkeys(_SUM_KEYS, 0)
+    for d in dirs:
+        for k, v in FactsEngine(d / "facts.jsonl").get_metrics_summary(usd_per_mtok=rate).items():
+            if k in total:
+                total[k] += v
+    for k, v in FactsEngine(gpath).get_metrics_summary(usd_per_mtok=rate).items():
+        if k in _FACT_KEYS:
+            total[k] = max(total[k], v)  # shortcut: assumes global hits are a superset of migrated ones
+        elif k in total:
+            total[k] += v
+    return derive_summary({**total, "projects": len(dirs)}, rate)
 
 
 _SUM_KEYS = (
