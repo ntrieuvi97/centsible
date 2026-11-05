@@ -14,7 +14,16 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, atomic_write_text, debug_warn, file_lock, find_common_bin
+from core.facts_engine import (
+    DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
+    FactsEngine,
+    atomic_write_text,
+    check_fact_attribution,
+    debug_warn,
+    estimate_tokens,
+    file_lock,
+    find_common_bin,
+)
 
 STOP_NUDGE_MIN_FAILURES = 2  # tool failures before the Stop hook asks the agent for gotchas
 RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
@@ -55,6 +64,23 @@ REFLECT_MODES = {
     "off": "Disabled: no reflection prompts or stop hook interventions.",
 }
 REFLECT_CHOICES = ["inline", "hook", "off", "on"]
+
+INJECT_ENV = "CENTSIBLE_INJECT_MODE"
+DEFAULT_INJECT_MODE = "jit"
+INJECT_MODES = {
+    "jit": "Just-In-Time Pre-Tool Hints (recommended): inject facts only right before the relevant tool runs, eliminating prompt token waste.",
+    "eager": "Eager Prompt Injection: matches user prompts and injects facts upfront at turn start.",
+    "off": "Disabled: disables all fact injections (loop guard remains active).",
+}
+INJECT_CHOICES = ["jit", "eager", "off"]
+
+
+def resolve_inject_mode() -> str:
+    """Inject mode from env var, else config.json, else 'jit'."""
+    for raw in (os.environ.get(INJECT_ENV), load_config().get("inject_mode"), load_config().get("inject")):
+        if raw in ("jit", "eager", "off"):
+            return raw
+    return DEFAULT_INJECT_MODE
 
 
 def normalize_reflect_mode(raw: Any) -> Optional[str]:
@@ -232,6 +258,8 @@ class LoopGuard:
             "last_failed_cmd": None,
             "calls_since_failed_cmd": 0,
             "injected_fact_ids": [],
+            "attributed_fact_ids": [],
+            "recent_error_tokens": [],
             "interventions": 0,
             "session_failures": 0,
             "session_tool_calls": 0,
@@ -311,11 +339,18 @@ class LoopGuard:
         # Trigger 1: Too many identical invocations
         if state["consecutive_identical_count"] >= self.max_identical_calls:
             state["interventions"] = state.get("interventions", 0) + 1
+            recent_tokens = state.get("recent_error_tokens", [])
+            if recent_tokens:
+                avg_err = sum(recent_tokens) // len(recent_tokens)
+                saved_tokens = max(DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, 2 * (avg_err + 500))
+            else:
+                saved_tokens = DEFAULT_SAVED_TOKENS_PER_LOOP_STOP
             self._save_state(state)
             if engine:
                 engine.update_metrics(
                     loop_interventions=1,
-                    saved_loop_tokens=DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
+                    saved_loop_tokens=saved_tokens,
+                    measured_loop_tokens=saved_tokens,
                 )
             cmd = args.get("CommandLine") or args.get("command") or tool_name
             reason = (
@@ -331,11 +366,18 @@ class LoopGuard:
             # A blocked call never reaches PostToolUse, so nothing else could reset this: block once, then release.
             errors = state["consecutive_errors_count"]
             state["consecutive_errors_count"] = 0
+            recent_tokens = state.get("recent_error_tokens", [])
+            if recent_tokens:
+                avg_err = sum(recent_tokens) // len(recent_tokens)
+                saved_tokens = max(DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, 2 * (avg_err + 500))
+            else:
+                saved_tokens = DEFAULT_SAVED_TOKENS_PER_LOOP_STOP
             self._save_state(state)
             if engine:
                 engine.update_metrics(
                     loop_interventions=1,
-                    saved_loop_tokens=DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
+                    saved_loop_tokens=saved_tokens,
+                    measured_loop_tokens=saved_tokens,
                 )
             reason = (
                 f"[LoopGuard Alert] {errors} consecutive failures detected. "
@@ -382,19 +424,30 @@ class LoopGuard:
         state = self._load_state()
         args = tool_call.get("args") or {}
         cmd = args.get("CommandLine") or args.get("command")
+        tool_name = tool_call.get("name", "")
+        is_cmd = tool_name in ("run_command", "Bash", "bash", "execute_command", "exec")
         prev_errors = state.get("consecutive_errors_count", 0)
 
         if error:
             state["consecutive_errors_count"] = prev_errors + 1
             state["session_failures"] = state.get("session_failures", 0) + 1
+            err_tok = estimate_tokens(str(error))
+            recent_errs = state.get("recent_error_tokens", [])
+            recent_errs.append(err_tok)
+            state["recent_error_tokens"] = recent_errs[-5:]
             if cmd:
                 state["last_failed_cmd"] = cmd
                 state["calls_since_failed_cmd"] = 0
             if engine:
-                engine.update_metrics(tool_calls_total=1, tool_calls_failed=1)
+                m_updates = {"tool_calls_total": 1, "tool_calls_failed": 1}
+                if is_cmd:
+                    m_updates["command_calls_total"] = 1
+                    m_updates["command_calls_failed"] = 1
+                engine.update_metrics(**m_updates)
         else:
             is_first_try = (prev_errors == 0 and state.get("consecutive_identical_count", 1) <= 1)
             state["consecutive_errors_count"] = 0
+            state["recent_error_tokens"] = []
             tool_name_cur = tool_call.get("name", "")
             failed_cmd = state.get("last_failed_cmd")
             if tool_name_cur in MUTATING_TOOLS:
@@ -409,13 +462,28 @@ class LoopGuard:
                     state["last_failed_cmd"] = None
             # Read-only tools (Read/Grep/Glob) between failure and retry preserve last_failed_cmd.
             if engine:
-                engine.update_metrics(
-                    tool_calls_total=1,
-                    first_try_successes=1 if is_first_try else 0,
-                )
+                m_updates = {
+                    "tool_calls_total": 1,
+                    "first_try_successes": 1 if is_first_try else 0,
+                }
+                if is_cmd:
+                    m_updates["command_calls_total"] = 1
+                    m_updates["first_try_cmd_successes"] = 1 if is_first_try else 0
+                engine.update_metrics(**m_updates)
 
-        # Keep last 20 entries in history for debugging/tracing
-        tool_name = tool_call.get("name", "")
+        # Fact Attribution: verify whether injected facts were applied in this tool call
+        injected_fids = state.get("injected_fact_ids", [])
+        attributed_fids = set(state.get("attributed_fact_ids", []))
+        if engine and injected_fids:
+            for fid in injected_fids:
+                if fid not in attributed_fids:
+                    fact_obj = engine.get_fact(fid)
+                    if fact_obj and check_fact_attribution(fact_obj, tool_call, is_success=(error is None)):
+                        attributed_fids.add(fid)
+                        engine.update_fact_attribution(fid)
+                        engine.update_metrics(attributed_hits=1)
+            state["attributed_fact_ids"] = sorted(attributed_fids)
+
         history = state.get("history", [])
         history.append({
             "tool": tool_name,

@@ -41,11 +41,12 @@ class TestClaudeIntegration(unittest.TestCase):
         )
 
     def test_claude_prompt_hook_injects_additional_context(self):
-        # 1. Add fact
+        # 1. Add fact with category always so it is injected into prompt context in JIT mode
         self._run_te([
             "facts", "add",
             "--pattern", "docker",
             "--fact", "Use docker compose v2 commands",
+            "--category", "always",
             "--id", "fact-docker",
         ])
 
