@@ -11,7 +11,6 @@ import os
 import re
 import shlex
 import sys
-import time
 import unicodedata
 from contextlib import contextmanager, ExitStack
 from datetime import datetime
@@ -141,6 +140,31 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text.encode("utf-8")) + 3) // 4)
+
+
+_VAL = r"""(?:"[^"]*"|'[^']*'|\S+)"""
+_SECRET_NAME = r"[\w-]*(?:token|secret|passw(?:or)?d|pwd|api[-_]?key|access[-_]?key|private[-_]?key|auth(?:orization)?|credential)[\w-]*"
+_MASK_VALUE = lambda m: m.group("k") + m.group("sep") + "***"
+_SECRET_RES = [
+    (re.compile(r"\b(Bearer|Basic)\s+[\w.~+/=-]+", re.IGNORECASE), lambda m: m.group(1) + " ***"),
+    # flags may take their value after a space (--password abc); bare names only after = or : (prose stays intact)
+    (re.compile(rf"(?<![\w-])(?P<k>--?{_SECRET_NAME})(?P<sep>=|\s+)(?P<v>{_VAL})", re.IGNORECASE), _MASK_VALUE),
+    (re.compile(rf"(?<![\w-])(?P<k>{_SECRET_NAME})(?P<sep>=|:\s*)(?P<v>{_VAL})", re.IGNORECASE), _MASK_VALUE),
+    (re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+@"), lambda m: "***@"),  # URL credentials
+    # well-known token shapes, wherever they appear
+    (re.compile(r"\b(?:sk-[\w-]{8,}|gh[pousr]_\w{20,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|eyJ[\w-]{10,}\.[\w-]{10,}\.[\w-]+)"), lambda m: "***"),
+]
+
+
+def redact_secrets(text: str) -> str:
+    """Mask credentials (secret-named flags/env vars, bearer tokens, URL creds, known token shapes) before a
+    command or prompt is persisted into facts.jsonl, which often sits in a repo and gets committed.
+
+    shortcut: pattern-based, misses secrets with no telltale name or shape; upgrade to an entropy check if that bites.
+    """
+    for rx, repl in _SECRET_RES:
+        text = rx.sub(repl, text)
+    return text
 
 
 def is_fact_missing_in_command(fact_text: str, cmd_text: str) -> bool:
@@ -544,7 +568,9 @@ class FactsEngine:
         if not clean_fact:
             raise ValueError("Fact content cannot be empty.")
 
-        fact_id = fact_id or f"fact_{int(time.time())}_{abs(hash(pattern)) % 10000}"
+        # Deterministic id: re-adding the same pattern+fact updates in place, a different fact on the
+        # same pattern is kept alongside (builtin hash() is per-process random, time() collides within 1s).
+        fact_id = fact_id or "fact_" + hashlib.sha1(f"{pattern}\0{clean_fact}".encode("utf-8")).hexdigest()[:10]
 
         new_entry = {
             "id": fact_id,
@@ -562,7 +588,7 @@ class FactsEngine:
         facts = self._read(path)
         updated = False
         for i, existing in enumerate(facts):
-            if existing.get("id") == fact_id or existing.get("pattern") == pattern:
+            if existing.get("id") == fact_id:
                 new_entry["hits"] = existing.get("hits", 0)
                 new_entry["injected_tokens"] = existing.get("injected_tokens", 0)
                 new_entry["saved_tokens"] = existing.get("saved_tokens", 0)
@@ -738,7 +764,9 @@ class FactsEngine:
             if existing.get("pattern") == target_bin and existing.get("category") != "auto-learned":
                 return None
 
-        fact_text = f"Use '{succeeded_cmd.strip()}' instead of '{failed_cmd.strip()}' when running {target_bin}."
+        fact_text = redact_secrets(
+            f"Use '{succeeded_cmd.strip()}' instead of '{failed_cmd.strip()}' when running {target_bin}."
+        )
         entry = self.add_fact(
             pattern=target_bin,
             fact=fact_text,
@@ -768,7 +796,8 @@ class FactsEngine:
 
         pattern = "|".join(targets[:2])
         slug = re.sub(r"[^a-zA-Z0-9_-]", "_", targets[0])[:32]
-        fact_id = f"auto_gotcha_{slug}"
+        # Text digest keeps two different rules about the same file apart; the same prompt stays idempotent.
+        fact_id = f"auto_gotcha_{slug}_{hashlib.sha1(norm.encode('utf-8')).hexdigest()[:6]}"
 
         # Avoid overwriting manual facts with the same pattern
         for existing in self.list_facts():
@@ -777,7 +806,7 @@ class FactsEngine:
 
         entry = self.add_fact(
             pattern=pattern,
-            fact=norm,
+            fact=redact_secrets(norm),
             category="gotcha",
             fact_id=fact_id,
         )
@@ -816,7 +845,23 @@ class FactsEngine:
 
     @staticmethod
     def _write(path: Path, facts: List[Dict]) -> None:
-        atomic_write_text(path, "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts))
+        # Hand-written `#` comments and unparsable lines are not facts, but must survive a rewrite.
+        # shortcut: they move to the top of the file, original interleaving is not kept.
+        kept: List[str] = []
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("#"):
+                    kept.append(s)
+                    continue
+                try:
+                    json.loads(s)
+                except json.JSONDecodeError:
+                    kept.append(s)
+        body = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts)
+        atomic_write_text(path, "".join(k + "\n" for k in kept) + body)
 
     def _save_merged(self, facts: List[Dict]) -> None:
         """Persist a merged view (callers hold both locks): project facts to the project file, global ones

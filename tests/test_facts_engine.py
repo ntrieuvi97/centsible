@@ -288,6 +288,48 @@ class TestGlobalFacts(unittest.TestCase):
         with self.assertRaises(ValueError):
             solo.add_fact("x", "y", scope="global")
 
+    def test_rewrite_keeps_comments_and_unparsable_lines(self):
+        self.engine.add_fact("foo", "fact A", fact_id="a")
+        path = self.engine.storage_path
+        path.write_text("# my note\n" + path.read_text() + "{corrupt\n")
+        self.engine.match("foo")  # records a hit -> rewrites the file
+        text = path.read_text()
+        self.assertIn("# my note", text)
+        self.assertIn("{corrupt", text)
+        self.assertEqual([f["id"] for f in self.engine.list_facts()], ["a"])
+
+    def test_same_pattern_different_fact_is_kept_but_identical_is_idempotent(self):
+        self.engine.add_fact("pytest", "run X")
+        self.engine.add_fact("pytest", "run Y")
+        self.engine.add_fact("pytest", "run Y")
+        self.assertEqual(sorted(f["fact"] for f in self.engine.list_facts()), ["run X", "run Y"])
+
+    def test_auto_gotchas_about_same_file_do_not_overwrite(self):
+        a = self.engine.auto_learn_from_correction("đừng sửa cli.py vì nó sinh tự động")
+        b = self.engine.auto_learn_from_correction("lưu ý là cli.py luôn phải chạy test sau khi sửa")
+        self.assertNotEqual(a["id"], b["id"])
+        self.assertEqual(len(self.engine.list_facts()), 2)
+        self.assertEqual(self.engine.auto_learn_from_correction("đừng sửa cli.py vì nó sinh tự động")["id"], a["id"])
+        self.assertEqual(len(self.engine.list_facts()), 2)
+
+    def test_redact_secrets(self):
+        from core.facts_engine import redact_secrets
+        for raw in (
+            "run --token=sk-SECRET123456 x", "run --password hunter2 x", "API_TOKEN=abc123 run",
+            "curl -H 'Authorization: Bearer abc.def.ghi' u", "git clone https://bob:pw@host/r.git",
+            "key ghp_" + "a" * 24, "AWS AKIAABCDEFGHIJKLMNOP",
+        ):
+            out = redact_secrets(raw)
+            for leak in ("SECRET123456", "hunter2", "abc123", "abc.def.ghi", "pw@", "a" * 24, "AKIAABCDEFGHIJKLMNOP"):
+                self.assertNotIn(leak, out, raw)
+        self.assertEqual(redact_secrets("đừng sửa auth/login.py, auth module hỏng"), "đừng sửa auth/login.py, auth module hỏng")
+
+    def test_auto_learned_facts_never_store_secrets(self):
+        learned = self.engine.auto_learn_from_recovery("pytest tests/", "uv run pytest -q --token=sk-SECRET123456 tests/")
+        self.assertNotIn("SECRET123456", learned["fact"])
+        gotcha = self.engine.auto_learn_from_correction("đừng sửa cli.py khi API_KEY=abcdef123 còn trong env")
+        self.assertNotIn("abcdef123", gotcha["fact"])
+
 
 if __name__ == "__main__":
     unittest.main()
