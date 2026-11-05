@@ -5,6 +5,7 @@ __pycache__/
 
 # Temporary state and facts
 *.tmp
+*.lock
 facts.jsonl.tmp
 te_loop_guard_*.json
 .agent_checkpoint.json

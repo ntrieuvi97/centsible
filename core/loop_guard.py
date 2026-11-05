@@ -9,11 +9,12 @@ import json
 import os
 import re
 import sys
+import functools
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, find_common_bin
+from core.facts_engine import DEFAULT_SAVED_TOKENS_PER_LOOP_STOP, FactsEngine, atomic_write_text, file_lock, find_common_bin
 
 STOP_NUDGE_MIN_FAILURES = 2  # tool failures before the Stop hook asks the agent for gotchas
 RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-learn
@@ -196,6 +197,15 @@ def get_state_path(conversation_id: Optional[str]) -> Path:
     return te_dir / f"loop_guard_{safe_id}.json"
 
 
+def _state_locked(fn):
+    """Serialize a LoopGuard load-modify-save across parallel hook processes (not reentrant: never nest)."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with file_lock(self.state_path):
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class LoopGuard:
     def __init__(
         self,
@@ -241,11 +251,11 @@ class LoopGuard:
 
     def _save_state(self, state: Dict[str, Any]) -> None:
         try:
-            with open(self.state_path, "w", encoding="utf-8") as f:
-                json.dump(state, f, ensure_ascii=False)
+            atomic_write_text(self.state_path, json.dumps(state, ensure_ascii=False))
         except Exception:
             pass
 
+    @_state_locked
     def record_injected_facts(self, fact_ids: List[str]) -> None:
         """Record fact IDs injected at turn start so PreToolUse knows what agent already saw."""
         state = self._load_state()
@@ -267,6 +277,7 @@ class LoopGuard:
         serialized = json.dumps({"name": tool_name, "args": clean_args}, sort_keys=True)
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
 
+    @_state_locked
     def check_pre_tool_use(
         self,
         tool_call: Dict[str, Any],
@@ -352,6 +363,7 @@ class LoopGuard:
         self._save_state(state)
         return "allow", None
 
+    @_state_locked
     def record_post_tool_use(
         self,
         tool_call: Dict[str, Any],
@@ -419,6 +431,7 @@ class LoopGuard:
 
         self._save_state(state)
 
+    @_state_locked
     def consume_gotcha_nudge(self, min_failures: int = STOP_NUDGE_MIN_FAILURES) -> int:
         """Failures seen since the last nudge if >= min_failures (then cleared), else 0. Lets the Stop hook nudge once per bout of trouble."""
         state = self._load_state()
@@ -430,6 +443,7 @@ class LoopGuard:
         self._save_state(state)
         return failures
 
+    @_state_locked
     def consume_wrapup_nudge(self) -> Optional[str]:
         """
         Check if the agent should be nudged to self-learn / capture facts before stopping.
