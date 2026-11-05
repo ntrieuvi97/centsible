@@ -78,6 +78,7 @@ class TestAttributionAndMetrics(unittest.TestCase):
             pattern="pytest",
             fact="Run pytest with '-q' flag.",
             fact_id="fact_pytest_q",
+            force=True,
         )
         self.guard.record_injected_facts(["fact_pytest_q"])
 
@@ -157,8 +158,10 @@ class TestAttributionAndMetrics(unittest.TestCase):
     def test_jit_inject_mode_configuration(self):
         from core.loop_guard import resolve_inject_mode
         from unittest import mock
-        # Default is smart hybrid
-        self.assertEqual(resolve_inject_mode(), "smart")
+        # Default is smart hybrid when no config file exists
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict("os.environ", {"CENTSIBLE_HOME": home}, clear=False):
+                self.assertEqual(resolve_inject_mode(), "smart")
         # Can be overridden via env
         with mock.patch.dict("os.environ", {"CENTSIBLE_INJECT_MODE": "jit"}):
             self.assertEqual(resolve_inject_mode(), "jit")
@@ -176,12 +179,14 @@ class TestAttributionAndMetrics(unittest.TestCase):
                 fact=f"Domain business rule number {i} for orders",
                 category="database",
                 fact_id=f"domain_{i}",
+                force=True,
             )
         self.engine.add_fact(
             pattern="order_tool|order",
             fact="Run order tool with --verbose",
             category="tool",
             fact_id="tool_fact",
+            force=True,
         )
 
         # In smart hybrid mode: TOOL_CATEGORIES are excluded, max_facts=3

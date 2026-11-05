@@ -637,6 +637,7 @@ def main() -> int:
     facts_add.add_argument("--fact", "-f", required=True, help="One-line fact to inject")
     facts_add.add_argument("--category", "-c", default="general", help="Category tag")
     facts_add.add_argument("--id", help="Optional explicit ID")
+    facts_add.add_argument("--force", action="store_true", help="Skip the pattern-specificity and fact-length checks")
     facts_add.add_argument("--global", dest="is_global", action="store_true", help="Store in the global facts file shared by every repo")
 
     # facts remove
@@ -798,13 +799,18 @@ def main() -> int:
             return 0
 
         elif args.facts_action == "add":
-            entry = engine.add_fact(
-                pattern=args.pattern,
-                fact=args.fact,
-                category=args.category,
-                fact_id=args.id,
-                scope="global" if args.is_global else "project",
-            )
+            try:
+                entry = engine.add_fact(
+                    pattern=args.pattern,
+                    fact=args.fact,
+                    category=args.category,
+                    fact_id=args.id,
+                    scope="global" if args.is_global else "project",
+                    force=args.force,
+                )
+            except ValueError as e:
+                print(f"✗ Not saved: {e}", file=sys.stderr)
+                return 2
             print(f"✓ Added micro-fact [{entry['id']}]: '{entry['fact']}' (Trigger: {entry['pattern']})")
             return 0
 

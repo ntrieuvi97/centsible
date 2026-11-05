@@ -132,6 +132,7 @@ class TestCliIntegration(unittest.TestCase):
         self._run_te([
             "facts", "add",
             "--pattern", "bruno",
+            "--force",
             "--fact", "Use --condense flag on UAT",
             "--category", "always",
             "--id", "fact-bruno",
@@ -216,6 +217,7 @@ class TestCliIntegration(unittest.TestCase):
         self._run_te([
             "facts", "add",
             "--pattern", "pytest",
+            "--force",
             "--fact", "Use pytest -q",
             "--category", "always",
             "--id", "fact-pytest",
@@ -288,6 +290,7 @@ class TestCliIntegration(unittest.TestCase):
         self._run_te([
             "facts", "add",
             "--pattern", "pytest",
+            "--force",
             "--fact", "Run pytest -q",
             "--id", "fact-1",
         ])

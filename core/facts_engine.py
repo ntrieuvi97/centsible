@@ -137,6 +137,84 @@ def regex_matches(pattern: str, text: str) -> bool:
     return bool(re.search(folded_pat, folded_txt, re.IGNORECASE))
 
 
+MAX_FACT_CHARS = 240
+MIN_BARE_TERM_LEN = 8
+SAVED_WILDCARD_SPAN = 40
+LINT_EXEMPT_CATEGORIES = frozenset({"always", "auto-learned"})
+# Words that appear in nearly every prompt of a dev repo; a pattern made only of these fires everywhere.
+GENERIC_TERMS = frozenset({
+    "run", "runs", "running", "test", "tests", "testing", "build", "create", "make", "fix", "check",
+    "file", "files", "error", "errors", "fail", "failed", "order", "orders", "code", "data", "call",
+    "use", "add", "get", "set", "new", "issue", "bug", "bot", "script", "command", "don", "chạy", "tạo",
+    "lên", "lỗi", "xem", "sửa", "kiểm", "tra", "đơn",
+})
+_IDENT_RE = re.compile(r"[_./:\-]|\d|[a-z][A-Z]")
+_WORD_RE = re.compile(r"[^\W\d_]+")
+
+
+def _split_top_level_alternatives(pattern: str) -> List[str]:
+    """Split `a|b.{0,9}(c|d)` on `|` outside parens/classes, unwrapping one enclosing `( ... )`."""
+    pattern = pattern.strip()
+    if pattern.startswith("(") and pattern.endswith(")"):
+        depth = 0
+        for i, c in enumerate(pattern):
+            depth += (c == "(") - (c == ")")
+            if depth == 0 and i < len(pattern) - 1:
+                break
+        else:
+            pattern = pattern[1:-1]
+    parts, buf, depth, in_class, i = [], [], 0, False, 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\" and i + 1 < len(pattern):
+            buf.append(pattern[i:i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        elif c == "|" and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(c)
+        i += 1
+    parts.append("".join(buf))
+    return [p for p in parts if p.strip()]
+
+
+def lint_pattern(pattern: str) -> Optional[str]:
+    """Return why `pattern` would fire on unrelated prompts, or None when it is specific enough.
+
+    Every top-level alternative needs an anchor: an identifier-like token (`query_argus`, `fast-e2e`,
+    `supplier_id`, `a/b`), a long unique word, or a combination of several non-generic words
+    (`pytest.{0,40}(spawn|fail)`: a tool plus a symptom). A lone short word (`pip`, `rtk`, `argus`) or only generic words
+    (`run.*test`) is rejected, because it matches questions and unrelated work.
+    """
+    if pattern == "*":
+        return None
+    for alt in _split_top_level_alternatives(pattern):
+        words = [w.lower() for w in _WORD_RE.findall(re.sub(r"\\[a-zA-Z]", " ", alt))]  # \b \s \d are not words
+        literal = re.sub(r"\.(\{\d*,?\d*\}|[*+?])|\(\?[:=!]", "", alt)  # drop wildcards, keep literal . _ / - :
+        if not words or _IDENT_RE.search(literal):
+            continue
+        specific = {w for w in words if w not in GENERIC_TERMS}
+        if not specific:
+            return f"alternative '{alt}' only has generic words ({', '.join(sorted(set(words)))})"
+        if _PLAIN_TERM_RE.fullmatch(alt):
+            if len(words) == 1 and len(words[0]) < MIN_BARE_TERM_LEN:
+                return f"alternative '{alt}' is a lone short word; add context or an identifier"
+        elif len(set(words)) < 2 and len(words[0]) < MIN_BARE_TERM_LEN:
+            return f"alternative '{alt}' reduces to one short word; add context or an identifier"
+    return None
+
+
 def estimate_tokens(text: str) -> int:
     """Estimate LLM token count (~4 UTF-8 bytes per token; accurate for both English & Vietnamese)."""
     if not text:
@@ -665,14 +743,26 @@ class FactsEngine:
         fact_id: Optional[str] = None,
         est_savings: int = DEFAULT_SAVED_TOKENS_PER_HIT,
         scope: str = "project",
+        force: bool = False,
     ) -> Dict:
-        """Add or update a micro-fact in the project file, or the global one with scope='global'."""
+        """Add or update a micro-fact in the project file, or the global one with scope='global'.
+
+        Rejects patterns that would fire on unrelated prompts and facts too long to be worth injecting
+        on every hit; `force=True` skips both checks.
+        """
         path = self._scope_path(scope)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
 
         if len(pattern) > 500:
             raise ValueError("Regex pattern is too long (maximum 500 characters).")
+        if not force and category not in LINT_EXEMPT_CATEGORIES:
+            problem = lint_pattern(pattern)
+            if problem:
+                raise ValueError(
+                    f"Pattern '{pattern}' is too loose: {problem}. Match the situation, not a keyword, e.g. "
+                    "'pytest.{0,40}(fail|error)' or an identifier like 'query_argus' (--force to override)."
+                )
 
         if pattern != "*":
             try:
@@ -689,6 +779,12 @@ class FactsEngine:
         clean_fact = normalize_text(fact.strip().replace("\n", " "))
         if not clean_fact:
             raise ValueError("Fact content cannot be empty.")
+        if len(clean_fact) > MAX_FACT_CHARS and not force:
+            raise ValueError(
+                f"Fact is {len(clean_fact)} chars (max {MAX_FACT_CHARS}); it is injected on every hit, "
+                "so keep it to one imperative line (--force to override)."
+            )
+        pattern = bound_wildcards(pattern, SAVED_WILDCARD_SPAN)
 
         # Deterministic id: re-adding the same pattern+fact updates in place, a different fact on the
         # same pattern is kept alongside (builtin hash() is per-process random, time() collides within 1s).
@@ -911,12 +1007,15 @@ class FactsEngine:
         fact_text = redact_secrets(
             f"Use '{succeeded_cmd.strip()}' instead of '{failed_cmd.strip()}' when running {target_bin}."
         )
-        entry = self.add_fact(
-            pattern=target_bin,
-            fact=fact_text,
-            category="auto-learned",
-            fact_id=f"auto_{target_bin}",
-        )
+        try:
+            entry = self.add_fact(
+                pattern=target_bin,
+                fact=fact_text,
+                category="auto-learned",
+                fact_id=f"auto_{target_bin}",
+            )
+        except ValueError:  # too long to be a one-line fact: pasted command chains are noise, not knowledge
+            return None
         self.update_metrics(auto_learned_facts=1)
         return entry
 
@@ -948,12 +1047,15 @@ class FactsEngine:
             if existing.get("pattern") == pattern and not str(existing.get("id", "")).startswith("auto_"):
                 return None
 
-        entry = self.add_fact(
-            pattern=pattern,
-            fact=redact_secrets(norm),
-            category="gotcha",
-            fact_id=fact_id,
-        )
+        try:
+            entry = self.add_fact(
+                pattern=pattern,
+                fact=redact_secrets(norm),
+                category="gotcha",
+                fact_id=fact_id,
+            )
+        except ValueError:  # target too generic to anchor a pattern
+            return None
         self.update_metrics(auto_learned_facts=1)
         return entry
 
