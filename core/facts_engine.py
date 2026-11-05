@@ -33,9 +33,44 @@ def fold_vietnamese(text: str) -> str:
     return "".join(ch for ch in nfd if unicodedata.category(ch) != "Mn")
 
 
+WILDCARD_SPAN = 80
+
+
+def bound_wildcards(pattern: str, span: int = WILDCARD_SPAN) -> str:
+    """Rewrite unbounded `.*`/`.+` (outside escapes and [classes]) to `.{0,N}`/`.{1,N}`.
+
+    Without this, `a.*b` matches any long prompt (or chat history) containing `a` and `b`
+    anywhere, so facts fire on unrelated prompts.
+    """
+    out: List[str] = []
+    i, n, in_class = 0, len(pattern), False
+    while i < n:
+        c = pattern[i]
+        if c == "\\" and i + 1 < n:
+            out.append(pattern[i:i + 2])
+            i += 2
+        elif in_class:
+            in_class = c != "]"
+            out.append(c)
+            i += 1
+        elif c == "[":
+            j = i + 1 + (pattern[i + 1:i + 2] == "^")
+            if pattern[j:j + 1] == "]":  # leading ] is a literal member
+                j += 1
+            out.append(pattern[i:j])
+            i, in_class = j, True
+        elif c == "." and pattern[i + 1:i + 2] in ("*", "+"):
+            out.append(".{%d,%d}" % (0 if pattern[i + 1] == "*" else 1, span))
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
 def regex_matches(pattern: str, text: str) -> bool:
     """Match regex against text with NFC normalization and Vietnamese accent-insensitive fallback."""
-    norm_pat = normalize_text(pattern)
+    norm_pat = bound_wildcards(normalize_text(pattern))
     norm_txt = normalize_text(text)
     if re.search(norm_pat, norm_txt, re.IGNORECASE):
         return True
@@ -416,9 +451,13 @@ class FactsEngine:
         if pattern != "*":
             try:
                 compiled = re.compile(pattern, re.IGNORECASE)
-                compiled.search("")
             except re.error as e:
                 raise ValueError(f"Invalid regex pattern '{pattern}': {e}")
+            if category != "always" and compiled.search(""):
+                raise ValueError(
+                    f"Pattern '{pattern}' matches empty text, so it would fire on every prompt "
+                    "(use category 'always' for that)."
+                )
 
         pattern = normalize_text(pattern)
         clean_fact = normalize_text(fact.strip().replace("\n", " "))

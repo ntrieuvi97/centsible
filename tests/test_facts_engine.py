@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.facts_engine import FactsEngine, get_default_facts_path
+from core.facts_engine import FactsEngine, bound_wildcards, get_default_facts_path
 
 
 class TestFactsEngine(unittest.TestCase):
@@ -50,6 +50,24 @@ class TestFactsEngine(unittest.TestCase):
         # Test prompt matching none
         matched_none = self.engine.match("Write a python function")
         self.assertEqual(len(matched_none), 0)
+
+    def test_wildcards_are_bounded_on_long_prompts(self):
+        self.engine.add_fact("pooling.*cancel.*idle", "pooling fact", fact_id="p")
+        near = "pooling: cancel when idle"
+        far = "pooling " + "x" * 500 + " cancel " + "y" * 500 + " idle"
+        self.assertEqual(len(self.engine.match(near, record_hits=False)), 1)
+        self.assertEqual(len(self.engine.match(far, record_hits=False)), 0)
+
+    def test_bound_wildcards_leaves_escapes_and_classes(self):
+        self.assertEqual(bound_wildcards(r"a\.*b"), r"a\.*b")
+        self.assertEqual(bound_wildcards("[.*]x"), "[.*]x")
+        self.assertEqual(bound_wildcards("[^]a.*]x.+"), "[^]a.*]x.{1,80}")
+        self.assertEqual(bound_wildcards("a.*?b"), "a.{0,80}?b")
+
+    def test_pattern_matching_empty_text_rejected(self):
+        with self.assertRaises(ValueError):
+            self.engine.add_fact(".*", "fires everywhere")
+        self.engine.add_fact(".*", "ok", category="always", fact_id="al")
 
     def test_format_ephemeral_message(self):
         self.engine.add_fact("bruno", "Fact A", fact_id="a")
