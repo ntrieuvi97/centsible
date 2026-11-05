@@ -383,7 +383,8 @@ def handle_hook_claude_prompt() -> None:
     if context_msg:
         output = {
             "hookSpecificOutput": {
-                "additionalContext": context_msg
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context_msg,
             }
         }
 
