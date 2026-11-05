@@ -114,6 +114,30 @@ class TestLoopGuard(unittest.TestCase):
         decision, _ = self.guard.check_pre_tool_use(tool_call_3)
         self.assertEqual(decision, "allow")
 
+    def test_circuit_breaker_allows_read_only_diagnostic_tools(self):
+        tool_call_1 = {"name": "run_command", "args": {"CommandLine": "broken_test"}}
+        tool_call_2 = {"name": "run_command", "args": {"CommandLine": "broken_build"}}
+        read_call = {"name": "read_file", "args": {"Path": "/app/error.log"}}
+
+        # 2 failures
+        self.guard.check_pre_tool_use(tool_call_1)
+        self.guard.record_post_tool_use(tool_call_1, error="exit code 1")
+        self.guard.check_pre_tool_use(tool_call_2)
+        self.guard.record_post_tool_use(tool_call_2, error="exit code 1")
+
+        # Read-only tool should NOT be blocked by circuit breaker
+        decision, reason = self.guard.check_pre_tool_use(read_call)
+        self.assertEqual(decision, "allow")
+        self.assertIsNone(reason)
+
+    def test_polling_tools_tolerate_repeated_identical_status_calls(self):
+        poll_call = {"name": "process", "args": {"action": "poll", "sessionId": "bg_123"}}
+        # Call 3, 4, 5 times
+        for _ in range(5):
+            decision, reason = self.guard.check_pre_tool_use(poll_call)
+            self.assertEqual(decision, "allow")
+            self.assertIsNone(reason)
+
     def test_recovery_after_success(self):
         tool_call_1 = {"name": "run_command", "args": {"CommandLine": "bad_cmd"}}
         tool_call_2 = {"name": "run_command", "args": {"CommandLine": "good_cmd"}}

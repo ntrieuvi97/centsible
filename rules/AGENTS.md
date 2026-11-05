@@ -11,11 +11,7 @@ These operational guidelines ensure maximum token efficiency and prevent runaway
 - When `[CENTSIBLE MICRO-SKILLS]` are injected in your turn context, strictly follow them.
 - They represent verified repository-specific facts (e.g., specific test flags, required env vars, file paths) learned from past sessions to save research tokens.
 
-## 3. Autonomous In-Turn Self-Learning (Tự học ngay trong phiên — Zero Extra Turn)
-- **Zero-Extra-Turn Policy:** Never wait for an end-of-session Stop hook or user reminder to record facts.
-- **Save Before Final Response:** Before writing your final textual answer to the user on any task that touched files or ran commands, perform a quick self-reflection:
-  - Did you verify or resolve any repo-specific test command, build flag, environment quirk, or architecture convention?
-  - If **YES**: Execute `./bin/centsible facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"` as your LAST tool call BEFORE emitting your final textual response.
-  - If **NO**: Proceed directly to your final response without recording bloat.
-- Doing this in-turn guarantees your rich final answer remains prominently visible to the user without being collapsed or superseded by an unnecessary continuation turn.
-- Keep facts strictly to **one concise imperative line** (≤ 120 chars) without conversational filler.
+## 3. Lean Self-Learning (Tự học tinh gọn — Zero Waste)
+- **Do Not Bloat Turn Endings:** Never execute speculative `facts add` commands at the end of a session unless an unexpected, non-obvious repository quirk or critical command flag was newly resolved and verified.
+- **Save Only High-Signal Facts:** When saving a fact, keep it strictly to **one concise imperative line** (≤ 120 chars) with a precise regex trigger: `./bin/centsible facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"`.
+- If no critical repo-specific quirk was resolved, proceed directly to your response without running extra tools.
