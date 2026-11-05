@@ -207,9 +207,13 @@ class TestFactsEngine(unittest.TestCase):
                 os.environ["CENTSIBLE_HOME"] = global_home
                 os.chdir(ws_path)
 
-                # 1. Neither .agents nor .claude exists -> neutral global path
+                # 1. Neither .agents nor .claude exists -> per-project global path (never shared across repos)
                 resolved_global = get_default_facts_path([str(ws_path)])
-                self.assertEqual(resolved_global, Path(global_home).resolve() / "facts.jsonl")
+                self.assertEqual(resolved_global.parent.parent, Path(global_home).resolve() / "projects")
+                self.assertEqual(resolved_global.name, "facts.jsonl")
+                with tempfile.TemporaryDirectory() as other_dir:
+                    self.assertNotEqual(resolved_global, get_default_facts_path([other_dir]))
+                self.assertFalse(resolved_global.parent.exists())  # resolving must not create dirs
 
                 # 2. Only .claude exists -> project .claude/facts.jsonl
                 claude_dir = ws_path / ".claude"
@@ -228,6 +232,19 @@ class TestFactsEngine(unittest.TestCase):
                     os.environ.pop("CENTSIBLE_HOME", None)
                 else:
                     os.environ["CENTSIBLE_HOME"] = old_env
+
+    def test_plain_patterns_match_whole_tokens_only(self):
+        self.engine.add_fact("pip", "use uv pip", fact_id="p")
+        self.engine.add_fact("auth/", "auth rule", fact_id="a")
+        self.engine.add_fact("jest|vitest", "run via npx", fact_id="j")
+        hit = lambda t: sorted(f["id"] for f in self.engine.match(t, record_hits=False))
+        self.assertEqual(hit("stdin=subprocess.PIPE"), [])
+        self.assertEqual(hit("pipeline stage"), [])
+        self.assertEqual(hit("install with pip"), ["p"])
+        self.assertEqual(hit("run pip install"), ["p"])
+        self.assertEqual(hit("edit auth/login.py"), ["a"])  # trailing '/' edge gets no boundary
+        self.assertEqual(hit("vitest watch"), ["j"])
+        self.assertEqual(hit("jestify"), [])
 
 
 if __name__ == "__main__":

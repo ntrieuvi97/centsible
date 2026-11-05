@@ -4,6 +4,8 @@ Facts Engine for centsible.
 Manages repository-specific micro-facts and conditional ephemeral injections.
 """
 
+import functools
+import hashlib
 import json
 import os
 import re
@@ -11,6 +13,7 @@ import shlex
 import sys
 import time
 import unicodedata
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -68,9 +71,57 @@ def bound_wildcards(pattern: str, span: int = WILDCARD_SPAN) -> str:
     return "".join(out)
 
 
+@contextmanager
+def file_lock(path: Path):
+    """Exclusive cross-process lock around read-modify-write of `path` (sidecar `<name>.lock`).
+
+    shortcut: best-effort, no-op where fcntl is missing (Windows) or the dir is unwritable.
+    """
+    try:
+        import fcntl
+        fh = open(path.with_name(path.name + ".lock"), "a")
+    except (ImportError, OSError):
+        yield
+        return
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
+    finally:
+        fh.close()  # closing releases the flock
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write via a unique temp file + rename so readers never see a partial file."""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+_PLAIN_TERM_RE = re.compile(r"[\w\-./: ]+")
+
+
+def _word_bound(pattern: str) -> str:
+    """Make plain-word patterns (or `a|b` lists of them) whole-token: `pip` must not hit `PIPE`/`pipeline`.
+
+    Only edges that are word characters get a boundary, so `auth/` still matches `auth/login.py`.
+    Patterns using regex syntax are left untouched.
+    """
+    parts = pattern.split("|")
+    if not all(_PLAIN_TERM_RE.fullmatch(p) for p in parts):
+        return pattern
+    return "|".join(
+        (r"(?<!\w)" if re.match(r"\w", p[0]) else "") + p + (r"(?!\w)" if re.match(r"\w", p[-1]) else "")
+        for p in parts
+    )
+
+
 def regex_matches(pattern: str, text: str) -> bool:
     """Match regex against text with NFC normalization and Vietnamese accent-insensitive fallback."""
-    norm_pat = bound_wildcards(normalize_text(pattern))
+    norm_pat = _word_bound(bound_wildcards(normalize_text(pattern)))
     norm_txt = normalize_text(text)
     if re.search(norm_pat, norm_txt, re.IGNORECASE):
         return True
@@ -141,27 +192,13 @@ def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
         if root_facts.exists():
             return root_facts
 
-    # 2. Neutral global fallback in ~/.centsible/facts.jsonl
+    # 2. Global fallback, scoped per project so one repo's facts never leak into another
     env_home = os.environ.get("CENTSIBLE_HOME")
     global_dir = Path(env_home).expanduser().resolve() if env_home else (Path.home() / ".centsible")
-    global_dir.mkdir(parents=True, exist_ok=True)
-    neutral_facts = global_dir / "facts.jsonl"
-
-    # Seamless one-time migration from legacy ~/.gemini/antigravity/facts.jsonl if present
-    if not neutral_facts.exists() and not env_home:
-        legacy_dir = Path.home() / ".gemini" / "antigravity"
-        legacy_facts = legacy_dir / "facts.jsonl"
-        if legacy_facts.exists():
-            try:
-                neutral_facts.write_bytes(legacy_facts.read_bytes())
-                legacy_metrics = legacy_dir / "metrics.json"
-                neutral_metrics = global_dir / "metrics.json"
-                if legacy_metrics.exists() and not neutral_metrics.exists():
-                    neutral_metrics.write_bytes(legacy_metrics.read_bytes())
-            except Exception:
-                pass
-
-    return neutral_facts
+    base = candidates[0] if candidates else home
+    root = next((p for p in (base, *base.parents) if (p / ".git").exists()), base)
+    key = f"{root.name}-{hashlib.sha1(str(root).encode('utf-8')).hexdigest()[:8]}"
+    return global_dir / "projects" / key / "facts.jsonl"
 
 
 COMMON_BINS = {
@@ -316,6 +353,15 @@ def detect_user_correction(prompt: str) -> Optional[str]:
     )
 
 
+def _facts_locked(fn):
+    """Serialize a FactsEngine read-modify-write on facts.jsonl across hook processes."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with file_lock(self.storage_path):
+            return fn(self, *args, **kwargs)
+    return wrapper
+
+
 class FactsEngine:
     def __init__(self, storage_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
@@ -355,17 +401,15 @@ class FactsEngine:
     def update_metrics(self, **deltas: int) -> Dict[str, int]:
         """Atomically increment telemetry counters."""
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        metrics = self.load_metrics()
-        for k, delta in deltas.items():
-            if delta:
-                metrics[k] = metrics.get(k, 0) + int(delta)
-        temp_path = self.metrics_path.with_suffix(".tmp")
-        try:
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, ensure_ascii=False, indent=2)
-            temp_path.replace(self.metrics_path)
-        except Exception:
-            pass
+        with file_lock(self.metrics_path):
+            metrics = self.load_metrics()
+            for k, delta in deltas.items():
+                if delta:
+                    metrics[k] = metrics.get(k, 0) + int(delta)
+            try:
+                atomic_write_text(self.metrics_path, json.dumps(metrics, ensure_ascii=False, indent=2))
+            except Exception:
+                pass
         return metrics
 
     def get_metrics_summary(self, usd_per_mtok: float = DEFAULT_USD_PER_MTOK) -> Dict[str, Any]:
@@ -434,6 +478,7 @@ class FactsEngine:
                     continue
         return facts
 
+    @_facts_locked
     def add_fact(
         self,
         pattern: str,
@@ -497,6 +542,7 @@ class FactsEngine:
         self._save_all(facts)
         return new_entry
 
+    @_facts_locked
     def remove_fact(self, fact_id_or_pattern: str) -> bool:
         """Remove a fact by ID or pattern."""
         facts = self.list_facts()
@@ -510,6 +556,7 @@ class FactsEngine:
             return True
         return False
 
+    @_facts_locked
     def match(self, text: str, record_hits: bool = True) -> List[Dict]:
         """Match input text against all patterns. Returns matching facts."""
         if not text:
@@ -554,6 +601,7 @@ class FactsEngine:
 
         return matched
 
+    @_facts_locked
     def match_tool_call(
         self,
         tool_call: Dict[str, Any],
@@ -724,8 +772,4 @@ class FactsEngine:
         return "\n".join(lines)
 
     def _save_all(self, facts: List[Dict]) -> None:
-        temp_path = self.storage_path.with_suffix(".tmp")
-        with open(temp_path, "w", encoding="utf-8") as f:
-            for item in facts:
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
-        temp_path.replace(self.storage_path)
+        atomic_write_text(self.storage_path, "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts))
