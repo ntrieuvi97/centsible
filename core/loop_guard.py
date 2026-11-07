@@ -39,6 +39,7 @@ READ_ONLY_DIAGNOSTIC_TOOLS = {
     "search_web", "web_search", "web_fetch", "mcp__openclaw__web_fetch",
     "mcp__openclaw__read", "fetch", "find",
 }
+FILE_READ_TOOLS = {"Read", "read_file", "view_file", "view", "mcp__openclaw__read", "read"}
 POLLING_ACTIONS = {"poll", "status", "checkpoint_status"}
 POLLING_TOOLS = {"manage_task", "checkpoint_status", "process", "mcp__openclaw__process"}
 VOLATILE_ARG_KEYS = {
@@ -54,14 +55,15 @@ TRIVIAL_CLI_FLAGS_RE = re.compile(
 CONFIG_KEYS = {
     "max_consecutive_errors": "CENTSIBLE_MAX_CONSECUTIVE_ERRORS",
     "max_identical_calls": "CENTSIBLE_MAX_IDENTICAL_CALLS",
+    "min_recovery_failures": "CENTSIBLE_MIN_RECOVERY_FAILURES",
 }
 MODE_ENV = "CENTSIBLE_LOOP_MODE"
 DEFAULT_MODE = "normal"
 # ultra = trips early, weak = tolerant of long debugging streaks.
 MODES = {
-    "ultra": {"max_consecutive_errors": 2, "max_identical_calls": 3},
-    "normal": {"max_consecutive_errors": 3, "max_identical_calls": 4},
-    "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5},
+    "ultra": {"max_consecutive_errors": 2, "max_identical_calls": 3, "min_recovery_failures": 2},
+    "normal": {"max_consecutive_errors": 3, "max_identical_calls": 4, "min_recovery_failures": 2},
+    "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5, "min_recovery_failures": 1},
 }
 
 REFLECT_ENV = "CENTSIBLE_REFLECT"
@@ -240,9 +242,13 @@ def extract_error_from_payload(payload: Dict[str, Any]) -> Optional[str]:
 
 def get_state_path(conversation_id: Optional[str]) -> Path:
     safe_id = "".join(c for c in (conversation_id or "default") if c.isalnum() or c in "-_")
-    # Secure user-isolated temp directory (prevents symlink/collision attacks on multi-user systems)
-    uid = os.getuid() if hasattr(os, "getuid") else "user"
-    te_dir = Path(tempfile.gettempdir()) / f"te_{uid}"
+    env_home = os.environ.get("CENTSIBLE_HOME")
+    if env_home:
+        te_dir = Path(env_home) / "state"
+    else:
+        # Secure user-isolated temp directory (prevents symlink/collision attacks on multi-user systems)
+        uid = os.getuid() if hasattr(os, "getuid") else "user"
+        te_dir = Path(tempfile.gettempdir()) / f"te_{uid}"
     try:
         te_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     except Exception as e:
@@ -258,6 +264,40 @@ def _state_locked(fn):
         with file_lock(self.state_path):
             return fn(self, *args, **kwargs)
     return wrapper
+
+
+def check_context_bomb(cmd_text: str, seen_ids: List[str]) -> Optional[Tuple[str, str]]:
+    """
+    Detect notorious unbounded CLI commands that dump tens of thousands of tokens into context
+    (e.g. unbounded 'git log', unfiltered recursive 'grep -r'). Fires at most once per session.
+    """
+    if not cmd_text:
+        return None
+    seen = set(seen_ids or [])
+
+    # 1. Unbounded git log (without -n, --max-count, -<num>, --oneline, commit range, or pipe/redirect)
+    if "builtin_bomb_git_log" not in seen:
+        if re.search(r"(?:^|[;&|]\s*)git\s+log\b", cmd_text) and not re.search(
+            r"(-n\b|--max-count|-\d+\b|--oneline|\.\.|\|\s*(?:head|tail|wc|grep)\b|>)", cmd_text
+        ):
+            return (
+                "builtin_bomb_git_log",
+                "[Centsible Context-Bomb Guard] Unbounded 'git log' can dump thousands of tokens into context. "
+                "Prefer 'git log -n 20 --oneline'.",
+            )
+
+    # 2. Unfiltered recursive grep -r / grep -R without --exclude-dir or --include
+    if "builtin_bomb_grep_r" not in seen:
+        if re.search(r"(?:^|[;&|]\s*)grep\s+-[a-zA-Z]*[rR]", cmd_text) and not re.search(
+            r"(--exclude-dir|--include|\|\s*(?:head|tail|wc)\b|>)", cmd_text
+        ):
+            return (
+                "builtin_bomb_grep_r",
+                "[Centsible Context-Bomb Guard] Unfiltered recursive 'grep -r' scans .git/node_modules/.venv and bloats context. "
+                "Prefer 'rg' or add '--exclude-dir={.git,node_modules,.venv}'.",
+            )
+
+    return None
 
 
 class LoopGuard:
@@ -278,7 +318,10 @@ class LoopGuard:
             "history": [],
             "consecutive_identical_count": 0,
             "consecutive_errors_count": 0,
+            "failed_cmd_streak": 0,
             "last_call_hash": None,
+            "recent_call_hashes": [],
+            "read_cache_counts": {},
             "last_failed_cmd": None,
             "calls_since_failed_cmd": 0,
             "injected_fact_ids": [],
@@ -311,6 +354,12 @@ class LoopGuard:
             atomic_write_text(self.state_path, json.dumps(state, ensure_ascii=False))
         except Exception as e:
             debug_warn("LoopGuard._save_state", e)
+
+    @_state_locked
+    def get_injected_fact_ids(self) -> List[str]:
+        """Return fact IDs already injected in this session to prevent duplicate prompt bloat."""
+        state = self._load_state()
+        return list(state.get("injected_fact_ids", []))
 
     @_state_locked
     def record_injected_facts(self, fact_ids: List[str]) -> None:
@@ -361,6 +410,10 @@ class LoopGuard:
             state["consecutive_identical_count"] = 1
             state["last_call_hash"] = call_hash
 
+        recent_hashes = state.get("recent_call_hashes", [])
+        recent_hashes.append(call_hash)
+        state["recent_call_hashes"] = recent_hashes[-12:]
+
         # Trigger 1: Too many identical invocations
         is_polling = (
             tool_name in POLLING_TOOLS
@@ -390,6 +443,58 @@ class LoopGuard:
             )
             log_event("loop_stop", self.conversation_id, trigger="identical", tool=tool_name, saved_tokens=saved_tokens)
             return "ask", reason
+
+        # Trigger 1b: Alternating ping-pong loop (A -> B -> A -> B)
+        ping_pong_len = max(4, 2 * self.max_identical_calls - 2)
+        if not is_polling and len(state["recent_call_hashes"]) >= ping_pong_len:
+            window = state["recent_call_hashes"][-ping_pong_len:]
+            first_h, second_h = window[0], window[1]
+            if (
+                first_h != second_h
+                and all(h == first_h for h in window[0::2])
+                and all(h == second_h for h in window[1::2])
+            ):
+                state["interventions"] = state.get("interventions", 0) + 1
+                state["recent_call_hashes"] = []
+                saved_tokens = DEFAULT_SAVED_TOKENS_PER_LOOP_STOP
+                self._save_state(state)
+                if engine:
+                    engine.update_metrics(
+                        loop_interventions=1,
+                        saved_loop_tokens=saved_tokens,
+                        measured_loop_tokens=saved_tokens,
+                    )
+                reason = (
+                    f"[LoopGuard Alert] Alternating ping-pong loop detected involving '{tool_name}' "
+                    f"({ping_pong_len} alternating identical calls). Halting turn to prevent token waste."
+                )
+                log_event("loop_stop", self.conversation_id, trigger="ping_pong", tool=tool_name, saved_tokens=saved_tokens)
+                return "ask", reason
+
+        # Trigger 1c: Session Redundant File-Read Guard (re-reading unmodified file range across turns/tools)
+        if tool_name in FILE_READ_TOOLS:
+            read_counts = state.get("read_cache_counts", {})
+            count = read_counts.get(call_hash, 0) + 1
+            read_counts[call_hash] = count
+            state["read_cache_counts"] = read_counts
+            if count >= self.max_identical_calls:
+                state["interventions"] = state.get("interventions", 0) + 1
+                read_counts[call_hash] = 0
+                saved_tokens = DEFAULT_SAVED_TOKENS_PER_LOOP_STOP
+                self._save_state(state)
+                if engine:
+                    engine.update_metrics(
+                        loop_interventions=1,
+                        saved_loop_tokens=saved_tokens,
+                        measured_loop_tokens=saved_tokens,
+                    )
+                path_arg = args.get("Path") or args.get("file_path") or args.get("path") or tool_name
+                reason = (
+                    f"[LoopGuard Alert] Redundant file read: '{path_arg}' has been read {count} times "
+                    "in this session without any intervening file modifications. Use the content already in context."
+                )
+                log_event("loop_stop", self.conversation_id, trigger="redundant_read", tool=tool_name, saved_tokens=saved_tokens)
+                return "ask", reason
 
         # Trigger 2: Too many consecutive errors on execution/mutating tools
         # Do not trip circuit breaker on read-only diagnostic tools (Read, Grep, fetch, etc.)
@@ -449,6 +554,20 @@ class LoopGuard:
                 )
                 return decision, reason
 
+        # Trigger 4: Built-in Context-Bomb Guard (unbounded git log, unfiltered grep -r)
+        cmd_arg = args.get("CommandLine") or args.get("command")
+        if cmd_arg and isinstance(cmd_arg, str):
+            bomb = check_context_bomb(cmd_arg, state.get("injected_fact_ids", []))
+            if bomb:
+                bomb_id, bomb_reason = bomb
+                seen_set = set(state.get("injected_fact_ids", []))
+                seen_set.add(bomb_id)
+                state["injected_fact_ids"] = sorted(seen_set)
+                self._save_state(state)
+                decision = "ask" if block_hints else "allow"
+                log_event("hint", self.conversation_id, tool=tool_name, decision=decision, fact_ids=[bomb_id])
+                return decision, bomb_reason
+
         self._save_state(state)
         return "allow", None
 
@@ -470,6 +589,7 @@ class LoopGuard:
         if error:
             state["consecutive_errors_count"] = prev_errors + 1
             state["session_failures"] = state.get("session_failures", 0) + 1
+            state["failed_cmd_streak"] = state.get("failed_cmd_streak", 0) + 1
             err_tok = estimate_tokens(str(error))
             recent_errs = state.get("recent_error_tokens", [])
             recent_errs.append(err_tok)
@@ -489,16 +609,20 @@ class LoopGuard:
             state["recent_error_tokens"] = []
             tool_name_cur = tool_call.get("name", "")
             failed_cmd = state.get("last_failed_cmd")
+            failed_streak = state.get("failed_cmd_streak", 0)
             if tool_name_cur in MUTATING_TOOLS:
                 # Code/config was modified after failure -> failure was likely a code bug, not a CLI quirk
                 state["last_failed_cmd"] = None
+                state["failed_cmd_streak"] = 0
                 state["calls_since_failed_cmd"] = 0
             elif failed_cmd and cmd:
-                if engine:
+                min_streak = resolve_threshold("min_recovery_failures")
+                if engine and failed_streak >= min_streak:
                     engine.auto_learn_from_recovery(failed_cmd, cmd)
                 # Keep the failure across unrelated commands, but not forever.
                 if find_common_bin(cmd) == find_common_bin(failed_cmd) or state.get("calls_since_failed_cmd", 0) >= RECOVERY_WINDOW:
                     state["last_failed_cmd"] = None
+                    state["failed_cmd_streak"] = 0
             # Read-only tools (Read/Grep/Glob) between failure and retry preserve last_failed_cmd.
             if engine:
                 m_updates = {
@@ -533,6 +657,10 @@ class LoopGuard:
         state["history"] = history[-20:]
         if state.get("last_failed_cmd") and not error:
             state["calls_since_failed_cmd"] = state.get("calls_since_failed_cmd", 0) + 1
+
+        # Any file mutation or shell command may modify files on disk -> invalidate read cache
+        if tool_name in MUTATING_TOOLS or is_cmd:
+            state["read_cache_counts"] = {}
 
         # Track session activity for autonomous end-of-session self-learning
         state["session_tool_calls"] = state.get("session_tool_calls", 0) + 1
@@ -589,9 +717,11 @@ class LoopGuard:
             state["session_failures"] = 0
             self._save_state(state)
             return (
-                f"[Centsible] {failures} tool failure(s) occurred this session. If you found a non-obvious gotcha "
-                "(file/CLI quirk, wrong flag, or environment rule a future session would trip on), save it now: "
-                "`centsible facts add --pattern \"<file|tool>\" --fact \"<one-line rule>\" --category gotcha`. "
+                f"[Centsible Zero-Waste] {failures} tool failure(s) occurred this session. If you resolved a non-obvious gotcha "
+                "(unique CLI flag, hidden env var, or path quirk a future session would trip on), save it now: "
+                "`centsible facts add --pattern \"<tool>.{0,30}(<flag|symptom>)\" --fact \"<one-line rule>\" --category gotcha`. "
+                "CRITICAL: Do NOT save standard commands (e.g. 'npm test', 'git status', 'python main.py'). "
+                "Pattern MUST be contextualized, NEVER a lone keyword. If nothing unusual occurred, do not save. "
                 "IMPORTANT: Conclude with a brief summary of your work so your answer is visible in this turn."
             )
 

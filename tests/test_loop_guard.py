@@ -168,7 +168,8 @@ class TestLoopGuard(unittest.TestCase):
         self.guard.record_post_tool_use(retry, error=None, engine=engine)
         self.assertEqual(engine.list_facts(), [])
 
-        # 2. Read-only tool between failure and retry preserves last_failed_cmd
+        # 2. Read-only tool between failure and retry preserves last_failed_cmd (requires streak >= 2)
+        self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
         self.guard.record_post_tool_use(failed, error="exit code 1", engine=engine)
         self.guard.record_post_tool_use(read, error=None, engine=engine)
         self.guard.record_post_tool_use(retry, error=None, engine=engine)
@@ -257,6 +258,61 @@ class TestLoopGuard(unittest.TestCase):
             decision_g2, reason_g2 = self.guard.check_pre_tool_use(edit_call, engine=engine)
             self.assertEqual(decision_g2, "allow")
             self.assertIsNone(reason_g2)
+
+    def test_ping_pong_alternating_loop_detection(self):
+        call_a = {"name": "run_command", "args": {"CommandLine": "pytest tests/unit"}}
+        call_b = {"name": "run_command", "args": {"CommandLine": "git diff --stat"}}
+
+        self.assertEqual(self.guard.check_pre_tool_use(call_a)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(call_b)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(call_a)[0], "allow")
+        decision, reason = self.guard.check_pre_tool_use(call_b)
+        self.assertEqual(decision, "ask")
+        self.assertIn("Alternating ping-pong loop detected", reason)
+
+    def test_session_redundant_file_read_guard(self):
+        read_call = {"name": "Read", "args": {"file_path": "/app/src/config.py"}}
+        grep_1 = {"name": "Grep", "args": {"pattern": "PORT"}}
+        grep_2 = {"name": "Grep", "args": {"pattern": "HOST"}}
+        edit_call = {"name": "Edit", "args": {"file_path": "/app/src/config.py"}}
+
+        # Read 1 -> Grep 1 -> Read 2 -> Grep 2 -> Read 3 (non-consecutive reads of unmodified file)
+        self.assertEqual(self.guard.check_pre_tool_use(read_call)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(grep_1)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(read_call)[0], "allow")
+        self.assertEqual(self.guard.check_pre_tool_use(grep_2)[0], "allow")
+        decision, reason = self.guard.check_pre_tool_use(read_call)
+        self.assertEqual(decision, "ask")
+        self.assertIn("Redundant file read", reason)
+
+        # File modification clears the read cache so subsequent reads are allowed
+        self.guard.record_post_tool_use(edit_call, error=None)
+        self.assertEqual(self.guard.check_pre_tool_use(read_call)[0], "allow")
+
+    def test_context_bomb_guard(self):
+        # Safe bounded git log passes silently
+        safe_log = {"name": "run_command", "args": {"CommandLine": "git log -n 10 --oneline"}}
+        d_safe, r_safe = self.guard.check_pre_tool_use(safe_log)
+        self.assertEqual(d_safe, "allow")
+        self.assertIsNone(r_safe)
+
+        # Unbounded git log triggers Context-Bomb Guard once per session
+        unbounded_log = {"name": "run_command", "args": {"CommandLine": "git log"}}
+        d1, r1 = self.guard.check_pre_tool_use(unbounded_log)
+        self.assertEqual(d1, "allow")
+        self.assertIn("[Centsible Context-Bomb Guard]", r1)
+        self.assertIn("git log -n 20 --oneline", r1)
+
+        # Second call in same session does not re-warn
+        d2, r2 = self.guard.check_pre_tool_use(unbounded_log)
+        self.assertEqual(d2, "allow")
+        self.assertIsNone(r2)
+
+        # Unfiltered recursive grep -r triggers Context-Bomb Guard once
+        unfiltered_grep = {"name": "run_command", "args": {"CommandLine": "grep -rn 'secret' ."}}
+        d3, r3 = self.guard.check_pre_tool_use(unfiltered_grep)
+        self.assertEqual(d3, "allow")
+        self.assertIn("[Centsible Context-Bomb Guard]", r3)
 
 
 if __name__ == "__main__":

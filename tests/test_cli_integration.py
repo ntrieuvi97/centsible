@@ -128,6 +128,11 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(res_del.returncode, 0)
         self.assertIn("✓ Removed fact", res_del.stdout)
 
+        # 5. Prune command
+        res_prune = self._run_te(["facts", "prune"])
+        self.assertEqual(res_prune.returncode, 0)
+        self.assertIn("No stale or zero-utility facts to prune", res_prune.stdout)
+
     def test_pre_invocation_hook_contract(self):
         # Seed a fact
         self._run_te([
@@ -223,6 +228,22 @@ class TestCliIntegration(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0)
         self.assertIn("=== Centsible Efficiency & ROI Report", res.stdout)
+
+    def test_cli_install_and_module_execution(self):
+        # Test centsible install --dry-run
+        res = self._run_te(["install", "--dry-run"])
+        self.assertEqual(res.returncode, 0)
+        self.assertIn("=== Centsible CLI Installation 🪙 ===", res.stdout)
+
+        # Test python3 -m centsible status
+        res_m = subprocess.run(
+            [sys.executable, "-m", "centsible", "status"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+        )
+        self.assertEqual(res_m.returncode, 0)
+        self.assertIn("=== Centsible Status 🪙 ===", res_m.stdout)
 
     def test_stats_all_sums_projects(self):
         import json as _json

@@ -1,7 +1,7 @@
 """Append-only JSONL log of hint / block / apply events, so effectiveness can be measured per agent and session."""
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,7 +28,7 @@ def log_event(event: str, conversation_id: Optional[str] = None, **fields: Any) 
         path = get_event_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         record: Dict[str, Any] = {
-            "ts": datetime.utcnow().isoformat() + "Z",
+            "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "event": event,
             "session": conversation_id or "default",
             "agent": agent_from_conversation(conversation_id),

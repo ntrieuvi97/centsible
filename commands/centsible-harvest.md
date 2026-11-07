@@ -1,37 +1,25 @@
 ---
-description: Perform an agentic multi-turn discovery of the repository to harvest 5-8 golden micro-facts and architectural gotchas
+description: Perform an agentic discovery of the repository to harvest 0-5 non-obvious gotchas and custom CLI rules (Zero-Waste)
 argument-hint: "[--force]"
 ---
 
-You are the Centsible Fact Harvester 🪙.
-Your objective is to systematically explore this repository and capture **5 to 8 high-signal Golden Micro-Facts** to maximize future token efficiency and prevent agent trial-and-error loops.
+You are the Centsible Zero-Waste Fact Harvester 🪙.
+Your objective is to inspect this repository and capture **0 to 5 non-obvious repository quirks** that would otherwise cause an AI agent to fail 2-3 times and waste tokens.
+
+### Zero-Waste Rules (Strict):
+- **NEVER save standard commands** known to any LLM (`npm test`, `pytest`, `git status`, `cargo test`, `go test ./...`, `python main.py`). `facts add` will reject them (exit 2).
+- **If the repository uses standard conventions without traps, save 0 facts.**
+- **Contextualized Regex Only:** Patterns must anchor on a specific file path (`src/auth/login\.py`), custom tool + context (`bruno.{0,30}(run|suite)`), or tool + symptom (`pytest.{0,30}(db|migration)`). Bare 1-word patterns (`test`, `auth`, `pytest`) are strictly rejected.
 
 ### Execution Procedure:
 
-1. **Investigate Tech Stack & Package Manager (Turn 1)**:
-   - Inspect root directory files (`ls`, look for lockfiles like `pnpm-lock.yaml`, `yarn.lock`, `bun.lockb`, `poetry.lock`, `Cargo.lock`, `go.sum`).
-   - Determine the canonical package manager and command runner (e.g. `pnpm`, `bun`, `poetry`).
-
-2. **Inspect CI/CD & Ground Truth (Turn 2)**:
-   - Check `.github/workflows/` or `.gitlab-ci.yml` or `Makefile` / `Justfile`.
-   - Identify the exact, verified test commands, linter flags, and build steps used in CI.
-
-3. **Identify Architectural Gotchas (Turn 3)**:
-   - Check `README.md`, `CONTRIBUTING.md`, or key config files (`tsconfig.json`, `pyproject.toml`, etc.).
-   - Look for non-obvious conventions, required environment variables, mock servers, or directory boundaries (e.g., monorepo packages, forbidden direct imports).
-
-4. **Filter & Select 5 to 8 Golden Facts**:
-   Ensure each fact follows Centsible's Micro-Fact Standards:
-   - **Concise:** Exactly 1 imperative sentence ($\le 120$ characters), zero conversational fluff.
-   - **Targeted Regex Pattern:** Must trigger ONLY in the situation the fact covers. Anchor on an identifier (`auth/login\.py`, `query_argus`), a tool plus a symptom (`pytest.{0,40}(fail|error)`), or an action plus context. A lone short word (`pytest`, `pip`, `token`) or generic words (`run.*test`, `.*`) are rejected by `facts add` (exit 2); rewrite the pattern instead of using `--force`.
-   - **Categories:** `tool_flag`, `package_manager`, `gotcha`, or `workflow`.
-
-5. **Store Facts via CLI**:
-   Run the following command for each discovered fact:
+1. **Inspect CI/CD & Custom Wrappers**:
+   - Check `.github/workflows/`, `Makefile`, `Justfile`, `package.json`, or `pyproject.toml` for **non-standard** flags, custom wrapper scripts, or required environment variables.
+2. **Identify Architectural Gotchas**:
+   - Check `README.md`, `CONTRIBUTING.md`, or core config files for hidden traps, required mock servers, or strict directory boundaries.
+3. **Store Only Non-Obvious Facts (0 to 5 max)**:
    ```bash
-   "${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible" facts add --pattern "<pattern>" --fact "<fact>" --category "<category>"
+   "${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible" facts add --pattern "<contextual-regex>" --fact "<concise imperative rule <=120 chars>" --category "<tool_flag|gotcha|workflow>"
    ```
-
-6. **Summary & Verification**:
-   - Run `"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible" facts list` to display the stored facts.
-   - Print a clean Markdown table summarizing the harvested facts and estimated token savings for future sessions.
+4. **Summary**:
+   - Run `"${CLAUDE_PLUGIN_ROOT:+${CLAUDE_PLUGIN_ROOT}/bin/}centsible" facts list` and summarize only the verified non-obvious facts stored.

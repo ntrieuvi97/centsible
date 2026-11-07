@@ -105,22 +105,162 @@ def _emit(obj: Dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def ensure_cli_symlink() -> None:
-    """Ensure ~/.local/bin/centsible symlink points to a valid binary so CLI works out-of-the-box."""
+def ensure_cli_symlink() -> Optional[Path]:
+    """Ensure ~/.local/bin/centsible symlink (or .cmd on Windows) points to a valid binary so CLI works out-of-the-box."""
     try:
-        local_bin = Path.home() / ".local" / "bin"
-        if not local_bin.is_dir():
-            return
-        link_path = local_bin / "centsible"
         target_bin = REPO_ROOT / "bin" / "centsible"
         if not target_bin.exists():
-            return
-        if not link_path.exists():
-            if link_path.is_symlink():
-                link_path.unlink()
-            link_path.symlink_to(target_bin)
+            return None
+
+        # Ensure executable bit on Unix
+        if os.name != "nt":
+            try:
+                st = target_bin.stat()
+                if not (st.st_mode & 0o111):
+                    target_bin.chmod(st.st_mode | 0o755)
+            except OSError:
+                pass
+
+        local_bin = Path.home() / ".local" / "bin"
+        local_bin.mkdir(parents=True, exist_ok=True)
+
+        if os.name == "nt":
+            cmd_path = local_bin / "centsible.cmd"
+            if not cmd_path.exists():
+                cmd_content = f'@echo off\r\npython "{target_bin.resolve()}" %*\r\n'
+                cmd_path.write_text(cmd_content, encoding="utf-8")
+            return cmd_path
+
+        link_path = local_bin / "centsible"
+        if link_path.is_symlink():
+            try:
+                if link_path.resolve() == target_bin.resolve():
+                    return link_path
+            except OSError:
+                pass
+            link_path.unlink()
+        elif link_path.exists():
+            try:
+                if link_path.samefile(target_bin):
+                    return link_path
+            except OSError:
+                pass
+            link_path.unlink()
+
+        link_path.symlink_to(target_bin)
+        return link_path
     except Exception as e:
         debug_warn("ensure_cli_symlink", e)
+        return None
+
+
+def handle_install(dry_run: bool = False) -> int:
+    """Install or symlink centsible to ~/.local/bin and ensure PATH is configured."""
+    print("=== Centsible CLI Installation 🪙 ===")
+    target_bin = REPO_ROOT / "bin" / "centsible"
+    if not target_bin.exists():
+        print(f"✗ Cannot locate launcher at: {target_bin}", file=sys.stderr)
+        return 1
+
+    # 1. Ensure executable permission on Unix
+    if os.name != "nt":
+        try:
+            st = target_bin.stat()
+            if not (st.st_mode & 0o111):
+                if not dry_run:
+                    target_bin.chmod(st.st_mode | 0o755)
+                print(f"✓ Ensured executable bit on {target_bin}")
+        except OSError as e:
+            print(f"⚠ Could not chmod launcher: {e}")
+
+    # 2. Setup target dir and link or batch wrapper
+    local_bin = Path.home() / ".local" / "bin"
+    if not dry_run:
+        local_bin.mkdir(parents=True, exist_ok=True)
+    print(f"• Target directory: {local_bin}")
+
+    if os.name == "nt":
+        cmd_path = local_bin / "centsible.cmd"
+        cmd_content = f'@echo off\r\npython "{target_bin.resolve()}" %*\r\n'
+        if not dry_run:
+            cmd_path.write_text(cmd_content, encoding="utf-8")
+        print(f"✓ Created Windows batch wrapper at {cmd_path}")
+    else:
+        link_path = local_bin / "centsible"
+        need_link = True
+        if link_path.is_symlink():
+            try:
+                if link_path.resolve() == target_bin.resolve():
+                    need_link = False
+            except OSError:
+                pass
+            if need_link and not dry_run:
+                link_path.unlink()
+        elif link_path.exists():
+            try:
+                if link_path.samefile(target_bin):
+                    need_link = False
+            except OSError:
+                pass
+            if need_link and not dry_run:
+                link_path.unlink()
+
+        if need_link:
+            if not dry_run:
+                link_path.symlink_to(target_bin)
+            print(f"✓ Created symlink: {link_path} -> {target_bin}")
+        else:
+            print(f"✓ Symlink already points to: {target_bin}")
+
+    # 3. Check PATH
+    env_path = os.environ.get("PATH", "")
+    in_path = False
+    for p in env_path.split(os.pathsep):
+        try:
+            if Path(p).resolve() == local_bin.resolve():
+                in_path = True
+                break
+        except Exception:
+            continue
+
+    if in_path:
+        print(f"✓ {local_bin} is in your current PATH.")
+    else:
+        print(f"⚠ {local_bin} is NOT in your current PATH.")
+        shell = os.environ.get("SHELL", "")
+        rc_file = None
+        if "zsh" in shell:
+            rc_file = Path.home() / ".zshrc"
+        elif "bash" in shell:
+            rc_file = Path.home() / ".bashrc"
+        elif (Path.home() / ".profile").exists():
+            rc_file = Path.home() / ".profile"
+        elif (Path.home() / ".bashrc").exists():
+            rc_file = Path.home() / ".bashrc"
+        elif (Path.home() / ".zshrc").exists():
+            rc_file = Path.home() / ".zshrc"
+
+        export_line = 'export PATH="$HOME/.local/bin:$PATH"'
+        if rc_file and rc_file.exists():
+            try:
+                content = rc_file.read_text(encoding="utf-8", errors="ignore")
+                if export_line not in content and ".local/bin" not in content:
+                    if not dry_run:
+                        with open(rc_file, "a", encoding="utf-8") as f:
+                            f.write(f"\n# Added by centsible installer\n{export_line}\n")
+                    print(f"✓ Added PATH export to {rc_file}")
+                else:
+                    print(f"• PATH export found in {rc_file}")
+            except Exception as e:
+                print(f"⚠ Could not update {rc_file}: {e}")
+
+        print("\n👉 To activate in your current terminal session, run:")
+        print(f"   {export_line}")
+        print("   (or open a new terminal tab)\n")
+
+    print("🎉 Centsible installation complete!")
+    print("Test your install with: centsible status")
+    return 0
 
 
 def _blocks(step: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -317,15 +457,16 @@ def handle_hook_pre_invocation() -> None:
     facts_path = get_default_facts_path(workspace_paths)
     engine = _engine(facts_path)
     guard = LoopGuard(conversation_id)
+    seen_ids = guard.get_injected_fact_ids() if conversation_id != "default" else []
 
     inject_mode = resolve_inject_mode()
     if inject_mode == "off":
         matched = []
     elif inject_mode == "jit":
-        all_matched = engine.match(user_input, record_hits=False)
+        all_matched = engine.match(user_input, record_hits=False, exclude_ids=seen_ids)
         always_facts = [f for f in all_matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         if always_facts:
-            matched = engine.match(user_input, record_hits=True)
+            matched = engine.match(user_input, record_hits=True, exclude_ids=seen_ids)
             matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         else:
             matched = []
@@ -337,9 +478,10 @@ def handle_hook_pre_invocation() -> None:
             record_hits=True,
             max_facts=resolve_max_prompt_facts(),
             exclude_categories=TOOL_CATEGORIES,
+            exclude_ids=seen_ids,
         )
     else:
-        matched = engine.match(user_input, record_hits=True)
+        matched = engine.match(user_input, record_hits=True, exclude_ids=seen_ids)
 
     if matched:
         guard.record_injected_facts([f.get("id", "") for f in matched])
@@ -431,15 +573,16 @@ def handle_hook_claude_prompt() -> None:
     facts_path = get_default_facts_path([cwd])
     engine = _engine(facts_path)
     guard = LoopGuard(session_id)
+    seen_ids = guard.get_injected_fact_ids() if session_id != "default" else []
 
     inject_mode = resolve_inject_mode()
     if inject_mode == "off":
         matched = []
     elif inject_mode == "jit":
-        all_matched = engine.match(user_prompt, record_hits=False)
+        all_matched = engine.match(user_prompt, record_hits=False, exclude_ids=seen_ids)
         always_facts = [f for f in all_matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         if always_facts:
-            matched = engine.match(user_prompt, record_hits=True)
+            matched = engine.match(user_prompt, record_hits=True, exclude_ids=seen_ids)
             matched = [f for f in matched if f.get("category") in ("always", "global") or f.get("pattern") == "*"]
         else:
             matched = []
@@ -451,9 +594,10 @@ def handle_hook_claude_prompt() -> None:
             record_hits=True,
             max_facts=resolve_max_prompt_facts(),
             exclude_categories=TOOL_CATEGORIES,
+            exclude_ids=seen_ids,
         )
     else:
-        matched = engine.match(user_prompt, record_hits=True)
+        matched = engine.match(user_prompt, record_hits=True, exclude_ids=seen_ids)
 
     if matched:
         guard.record_injected_facts([f.get("id", "") for f in matched])
@@ -653,6 +797,13 @@ def main() -> int:
     facts_test = facts_sub.add_parser("test", help="Test fact matching against a prompt string")
     facts_test.add_argument("prompt", help="User input text to test")
 
+    # facts prune
+    facts_prune = facts_sub.add_parser("prune", help="Prune stale or zero-utility micro-facts")
+    facts_prune.add_argument("--days", type=int, default=30, help="Prune facts older than N days with 0 hits (default: 30)")
+    facts_prune.add_argument("--min-hits", type=int, default=20, help="Prune facts with >= N hits but 0% attribution (default: 20)")
+    facts_prune.add_argument("--dry-run", action="store_true", help="Preview facts to prune without deleting")
+    facts_prune.add_argument("--global", dest="is_global", action="store_true", help="Prune global facts file")
+
     # status command
     subparsers.add_parser("status", help="Show system status and facts count")
 
@@ -693,7 +844,14 @@ def main() -> int:
     config_unset = config_sub.add_parser("unset", help="Remove a setting or threshold (back to default)")
     config_unset.add_argument("key", choices=sorted(CONFIG_KEYS) + ["mode", "reflect", "inject", "inject_mode"])
 
+    # install command
+    install_parser = subparsers.add_parser("install", help="Install or symlink centsible CLI to user's PATH")
+    install_parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying files")
+
     args = parser.parse_args()
+
+    if args.command == "install":
+        return handle_install(dry_run=args.dry_run)
 
     # Route hook commands
     if args.command == "hook":
@@ -839,6 +997,26 @@ def main() -> int:
                 print(f"- [{m.get('id')}] {m.get('fact')} (Pattern: {m.get('pattern')})")
             return 0
 
+        elif args.facts_action == "prune":
+            scope = "global" if getattr(args, "is_global", False) else "project"
+            pruned, kept = engine.prune_facts(
+                min_hits=args.min_hits,
+                max_age_days=args.days,
+                dry_run=args.dry_run,
+                scope=scope,
+            )
+            if not pruned:
+                print(f"✓ No stale or zero-utility facts to prune (checked {len(kept)} active facts).")
+                return 0
+            action_word = "Would prune" if args.dry_run else "Pruned"
+            print(f"=== Centsible Facts Pruning 🪙 ===")
+            print(f"• {action_word} {len(pruned)} fact(s) ({len(kept)} remaining):")
+            for f in pruned:
+                print(f"  - [{f.get('id')}] ({f.get('pattern')}) -> {f.get('fact')} [Reason: {f.get('prune_reason')}]")
+            if args.dry_run:
+                print("\nRun without --dry-run to commit deletion.")
+            return 0
+
         else:
             facts_parser.print_help()
             return 1
@@ -852,7 +1030,11 @@ def main() -> int:
         print(f"• Total Hits:     {summary['fact_hits']}{hit_usage}")
         measured_trace = f" (~{summary.get('saved_loop_tokens', 0):,} trace tokens saved)" if summary['loop_interventions'] > 0 else ""
         print(f"• Loop Stops:     {summary['loop_interventions']}{measured_trace}")
-        print(f"• Tokens Saved:   ~{summary['net_saved_tokens']:,} tokens ({summary['saved_cents']:.2f}¢ / ${summary['saved_usd']:.4f})")
+        if summary.get("attributed_hits", 0) > 0 or summary.get("fact_hits", 0) == 0:
+            saved_str = f"~{summary.get('attributed_net_saved_tokens', summary['net_saved_tokens']):,} tokens [Verified]"
+        else:
+            saved_str = f"~{summary.get('attributed_net_saved_tokens', 0):,} tokens [Verified: 0 applied, overhead -{summary['injected_tokens']:,}]"
+        print(f"• Tokens Saved:   {saved_str} ({summary['saved_cents']:.2f}¢ / ${summary['saved_usd']:.4f})")
         cmd_rate_str = f" | {summary.get('first_try_cmd_rate', 100.0):.1f}% cmd" if summary.get("command_calls_total", 0) > 0 else ""
         print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% tools{cmd_rate_str} ({summary['tool_calls_total']} calls)")
         print(f"• Loop Guard:     Enabled (mode {resolve_mode()}: {resolve_threshold('max_identical_calls')} identical, {resolve_threshold('max_consecutive_errors')} errors)")
@@ -866,15 +1048,19 @@ def main() -> int:
         if args.prompt:
             prompt_text = (
                 "You are the Centsible Fact Harvester 🪙.\n"
-                "Systematically explore this repository and capture 5 to 8 high-signal Golden Micro-Facts "
+                "Systematically explore this repository and capture 3 to 5 high-signal Golden Micro-Facts "
                 "to maximize future token efficiency and prevent agent trial-and-error loops.\n\n"
+                "Zero-Waste Golden Rules:\n"
+                "- ZERO TRIVIAL FACTS: Never save standard commands ('npm test', 'git status', 'python main.py'). "
+                "If this repository strictly adheres to standard framework conventions without quirks or hidden flags, output ZERO facts. "
+                "Having 0 facts is strictly superior to creating noisy facts.\n"
+                "- CONTEXTUALIZED REGEX: Patterns must pair the tool with a symptom/flag, e.g. 'pytest.{0,40}(fail|flag)' or specific file paths.\n\n"
                 "Execution Procedure:\n"
-                "1. Inspect lockfiles to determine canonical package manager (pnpm, bun, yarn, poetry, cargo, go).\n"
-                "2. Inspect CI/CD (.github/workflows/, .gitlab-ci.yml) for exact test/build/lint commands and flags.\n"
-                "3. Inspect README / configs for architectural gotchas, required env vars, or prohibited patterns.\n"
-                "4. Distill 5 to 8 Golden Facts: strictly 1 imperative sentence (<= 120 chars) with targeted regex trigger.\n"
-                "5. Save each fact via: centsible facts add --pattern \"<pattern>\" --fact \"<fact>\" --category \"<category>\"\n"
-                "6. Run 'centsible facts list' and summarize the saved facts."
+                "1. Inspect lockfiles and package configs for non-standard runners or monorepo filters.\n"
+                "2. Inspect CI/CD workflows for required custom flags, environment variables, or gotchas.\n"
+                "3. If and only if unique quirks exist, distill 1 imperative sentence (<= 120 chars).\n"
+                "4. Save via: centsible facts add --pattern \"<pattern>\" --fact \"<fact>\" --category \"<category>\"\n"
+                "5. Run 'centsible facts list' and summarize the saved facts."
             )
             print(prompt_text)
             return 0

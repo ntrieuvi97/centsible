@@ -17,6 +17,7 @@ class TestVersionSync(unittest.TestCase):
             "plugin.json": json.loads((ROOT / "plugin.json").read_text())["version"],
             ".claude-plugin/plugin.json": json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"],
             ".claude-plugin/marketplace.json": json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())["plugins"][0]["version"],
+            "pyproject.toml": re.search(r'^version\s*=\s*"([\d.]+)"', (ROOT / "pyproject.toml").read_text(), re.M).group(1),
             "README.md": re.search(r"Version-([\d.]+)-", (ROOT / "README.md").read_text()).group(1),
         }
         self.assertEqual({k: v for k, v in found.items() if v != __version__}, {})

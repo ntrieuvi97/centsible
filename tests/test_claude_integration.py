@@ -69,6 +69,15 @@ class TestClaudeIntegration(unittest.TestCase):
         self.assertIn("additionalContext", output["hookSpecificOutput"])
         self.assertIn("Use docker compose v2 commands", output["hookSpecificOutput"]["additionalContext"])
 
+        # Turn 2 in the SAME session does NOT re-inject the same fact into conversation context
+        res2 = self._run_te(
+            ["hook", "claude-prompt"],
+            stdin_data=json.dumps(claude_payload),
+        )
+        self.assertEqual(res2.returncode, 0)
+        self.assertEqual(json.loads(res2.stdout), {})
+        get_state_path("claude-session-123").unlink(missing_ok=True)
+
     def test_claude_prompt_hook_no_match(self):
         claude_payload = {
             "hook_event_name": "UserPromptSubmit",
@@ -143,7 +152,9 @@ class TestClaudeIntegration(unittest.TestCase):
                 "session_id": sid, "cwd": self.temp_dir.name, **extra,
             })
 
-        # Claude Code sends failures via PostToolUseFailure with a plain 'error' string
+        # Claude Code sends failures via PostToolUseFailure with a plain 'error' string (min streak >= 2)
+        res = self._run_te(["hook", "claude-post-tool-failure"], payload("PostToolUseFailure", "cd app && pytest tests/", error="Exit code 1"))
+        self.assertEqual(res.returncode, 0)
         res = self._run_te(["hook", "claude-post-tool-failure"], payload("PostToolUseFailure", "cd app && pytest tests/", error="Exit code 1"))
         self.assertEqual(res.returncode, 0)
         res = self._run_te(["hook", "claude-post-tool"], payload("PostToolUse", "cd app && python3 -m pytest tests/ -q"))

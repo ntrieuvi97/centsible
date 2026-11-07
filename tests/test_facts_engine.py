@@ -124,7 +124,7 @@ class TestFactsEngine(unittest.TestCase):
         self.assertIn("python3 -m pytest tests/ -q", learned["fact"])
 
         # Trigger a hit and verify ROI summary
-        self.engine.match("Please run pytest now")
+        self.engine.match("Please run pytest tests now")
         summary = self.engine.get_metrics_summary(usd_per_mtok=3.0)
         self.assertEqual(summary["total_facts"], 1)
         self.assertEqual(summary["auto_learned_facts"], 1)
@@ -146,7 +146,8 @@ class TestFactsEngine(unittest.TestCase):
         for failed, ok, expected in cases:
             learned = self.engine.auto_learn_from_recovery(failed, ok)
             self.assertIsNotNone(learned, failed)
-            self.assertEqual(learned["pattern"], expected)
+            self.assertIsNone(lint_pattern(learned["pattern"]))
+            self.assertTrue(regex_matches(learned["pattern"], failed) or regex_matches(learned["pattern"], ok))
         # Different tools or no known tool -> nothing learned
         self.assertIsNone(self.engine.auto_learn_from_recovery("pytest x", "npm test"))
         self.assertIsNone(self.engine.auto_learn_from_recovery("./foo a", "./foo b"))
@@ -405,8 +406,11 @@ class TestPatternSpecificity(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "too loose"):
                 engine.add_fact("pytest", "run with -q")
             self.assertEqual(engine.list_facts(), [])
+            # auto-learned is NO LONGER exempt from linting (zero-waste)
+            with self.assertRaisesRegex(ValueError, "too loose"):
+                engine.add_fact("pip", "use uv pip", category="auto-learned")
             engine.add_fact("pytest", "run with -q", force=True)
-            engine.add_fact("pip", "use uv pip", category="auto-learned", fact_id="auto_pip")
+            engine.add_fact("*", "always fires", category="always", fact_id="al")
             self.assertEqual(len(engine.list_facts()), 2)
 
     def test_add_fact_rejects_overlong_fact(self):
@@ -475,6 +479,73 @@ class TestPatternSpecificity(unittest.TestCase):
                 self.assertEqual(engine.match(prompt, record_hits=False), [], prompt)
             for prompt in ("tạo đơn UAT cho khách 84909000003", "lên đơn 2 điểm giao"):
                 self.assertEqual(len(engine.match(prompt, record_hits=False)), 1, prompt)
+
+    def test_lint_fact_content_rejects_trivial_commands_and_generic_platitudes(self):
+        from core.facts_engine import lint_fact_content
+        # Trivial standard commands
+        self.assertIsNotNone(lint_fact_content("npm test"))
+        self.assertIsNotNone(lint_fact_content("Run 'npm test'"))
+        self.assertIsNotNone(lint_fact_content("git status"))
+        self.assertIsNotNone(lint_fact_content("python main.py"))
+        self.assertIsNotNone(lint_fact_content("pytest"))
+        self.assertIsNotNone(lint_fact_content("pytest tests/"))
+        self.assertIsNotNone(lint_fact_content("cargo build"))
+        self.assertIsNotNone(lint_fact_content("git diff"))
+        self.assertIsNotNone(lint_fact_content("cargo check"))
+
+        # Generic platitudes
+        self.assertIsNotNone(lint_fact_content("Write clean code"))
+        self.assertIsNotNone(lint_fact_content("Remember to test your code"))
+
+        # High-signal facts with flags, paths, env vars, or directives
+        self.assertIsNone(lint_fact_content("Run with 'pytest tests/ -q --tb=short'"))
+        self.assertIsNone(lint_fact_content("Never mutate token keys directly"))
+        self.assertIsNone(lint_fact_content("Prefix shell commands with rtk"))
+        self.assertIsNone(lint_fact_content("Always pass DATABASE_URL=test when running migrations"))
+        self.assertIsNone(lint_fact_content("Keep the exit codes stable in cli.py"))
+
+    def test_add_fact_enforces_fact_content_linting_unless_forced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            with self.assertRaisesRegex(ValueError, "trivial command"):
+                engine.add_fact("npm.{0,30}(test)", "npm test")
+            self.assertEqual(engine.list_facts(), [])
+            # With force=True, it passes
+            entry = engine.add_fact("npm.{0,30}(test)", "npm test", force=True)
+            self.assertEqual(entry["fact"], "npm test")
+
+    def test_prune_facts_removes_zero_utility_and_stale_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = FactsEngine(Path(tmp) / "facts.jsonl")
+            # 1. Fact with 25 hits and 0 attribution -> zero utility
+            f1 = engine.add_fact("pytest.{0,30}(tests)", "run with -q", force=True)
+            f1["hits"] = 25
+            f1["attributed_hits"] = 0
+
+            # 2. Fact with high attribution -> useful
+            f2 = engine.add_fact("rtk.{0,30}(pytest)", "prefix with rtk", force=True)
+            f2["hits"] = 10
+            f2["attributed_hits"] = 8
+
+            # 3. Stale fact created 40 days ago with 0 hits
+            f3 = engine.add_fact("auth.{0,30}(tokens)", "never edit tokens", force=True)
+            f3["hits"] = 0
+            f3["created_at"] = "2026-09-01T00:00:00Z"
+
+            engine._save_merged([f1, f2, f3])
+
+            # Dry run test
+            pruned, kept = engine.prune_facts(min_hits=20, max_age_days=30, dry_run=True)
+            self.assertEqual(len(pruned), 2)
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(len(engine.list_facts()), 3)  # unchanged on disk
+
+            # Real prune
+            pruned, kept = engine.prune_facts(min_hits=20, max_age_days=30, dry_run=False)
+            self.assertEqual(len(pruned), 2)
+            self.assertEqual(len(kept), 1)
+            self.assertEqual(len(engine.list_facts()), 1)
+            self.assertEqual(engine.list_facts()[0]["id"], f2["id"])
 
 
 if __name__ == "__main__":
