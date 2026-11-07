@@ -13,7 +13,7 @@ import shlex
 import sys
 import unicodedata
 from contextlib import contextmanager, ExitStack
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -22,6 +22,79 @@ DEFAULT_SAVED_TOKENS_PER_LOOP_STOP = 2000
 DEFAULT_USD_PER_MTOK = 3.0
 TOOL_CATEGORIES = frozenset({"cli", "tool", "syntax", "runner"})
 DEFAULT_MAX_PROMPT_FACTS = 3
+
+MAX_FACT_CHARS = 240
+MIN_BARE_TERM_LEN = 8
+SAVED_WILDCARD_SPAN = 40
+LINT_EXEMPT_CATEGORIES = frozenset({"always"})
+# Words that appear in nearly every prompt of a dev repo; a pattern made only of these fires everywhere.
+GENERIC_TERMS = frozenset({
+    "run", "runs", "running", "test", "tests", "testing", "build", "create", "make", "fix", "check",
+    "file", "files", "error", "errors", "fail", "failed", "order", "orders", "code", "data", "call",
+    "use", "add", "get", "set", "new", "issue", "bug", "bot", "script", "command", "don", "chạy", "tạo",
+    "lên", "lỗi", "xem", "sửa", "kiểm", "tra", "đơn",
+})
+_IDENT_RE = re.compile(r"[_./:\-]|\d|[a-z][A-Z]")
+_WORD_RE = re.compile(r"[^\W\d_]+")
+
+STANDARD_TRIVIAL_COMMANDS = frozenset({
+    "npm test", "npm run test", "npm start", "npm run dev", "npm run build",
+    "pnpm test", "pnpm run test", "pnpm start", "pnpm dev", "pnpm build",
+    "yarn test", "yarn start", "yarn dev", "yarn build",
+    "bun test", "bun run dev", "bun run build",
+    "git status", "git pull", "git commit", "git add", "git push", "git checkout",
+    "python main.py", "python app.py", "python index.py",
+    "pytest", "pytest tests", "pytest tests/",
+    "cargo build", "cargo test", "cargo run",
+    "go run .", "go test ./...", "go build",
+    "mvn test", "mvn clean install",
+})
+
+_BARE_CMD_RE = re.compile(
+    r"^(npm|pnpm|yarn|bun|git|cargo|go|python|python3|mvn)\s+([a-zA-Z0-9_.-]+)$",
+    re.IGNORECASE,
+)
+
+_GENERIC_ADVICE_PHRASES = frozenset({
+    "clean code", "write clean code", "write tests", "test your code",
+    "test before commit", "be careful", "check errors", "check error",
+    "format code", "viết test", "kiểm tra code", "cẩn thận",
+})
+
+
+def lint_fact_content(fact: str) -> Optional[str]:
+    """
+    Validate that a micro-fact is high-signal, non-trivial, and actionable.
+    Rejects standard commands known to any LLM and generic platitudes.
+    """
+    norm = fact.strip().lower()
+    if not norm:
+        return "Fact content cannot be empty."
+
+    # Strip conversational/directive prefixes (e.g. "Run npm test", "Use 'git status'")
+    cleaned = re.sub(
+        r"^(always\s+|remember\s+to\s+|please\s+|run\s+with\s+|run\s+|use\s+|chạy\s+|hãy\s+|nhớ\s+)",
+        "",
+        norm,
+    ).strip(" '\"`.,;:")
+
+    # 1. Exact match against known trivial commands
+    if cleaned in STANDARD_TRIVIAL_COMMANDS:
+        return f"Command '{cleaned}' is a standard trivial command known by any LLM. Zero-waste rule rejects this."
+
+    # 2. Bare tool + single argument commands without flags or paths (e.g. "git diff", "cargo check", "npm start")
+    m_bare = _BARE_CMD_RE.match(cleaned)
+    if m_bare:
+        subcmd = m_bare.group(2).lower()
+        if subcmd in ("diff", "log", "start", "check", "build", "test", "run", "status", "push", "pull"):
+            return f"Command '{cleaned}' is a standard bare CLI invocation without specialized flags or arguments."
+
+    # 3. Generic platitudes / empty advice without actionable anchors
+    for phrase in _GENERIC_ADVICE_PHRASES:
+        if phrase in norm and not any(ch in norm for ch in ("--", "-", "=", "/", ".")):
+            return f"Fact contains generic advice ('{phrase}') without actionable flags or path anchors."
+
+    return None
 
 
 def normalize_text(text: str) -> str:
@@ -135,21 +208,6 @@ def regex_matches(pattern: str, text: str) -> bool:
     folded_pat = fold_vietnamese(norm_pat)
     folded_txt = fold_vietnamese(norm_txt)
     return bool(re.search(folded_pat, folded_txt, re.IGNORECASE))
-
-
-MAX_FACT_CHARS = 240
-MIN_BARE_TERM_LEN = 8
-SAVED_WILDCARD_SPAN = 40
-LINT_EXEMPT_CATEGORIES = frozenset({"always", "auto-learned"})
-# Words that appear in nearly every prompt of a dev repo; a pattern made only of these fires everywhere.
-GENERIC_TERMS = frozenset({
-    "run", "runs", "running", "test", "tests", "testing", "build", "create", "make", "fix", "check",
-    "file", "files", "error", "errors", "fail", "failed", "order", "orders", "code", "data", "call",
-    "use", "add", "get", "set", "new", "issue", "bug", "bot", "script", "command", "don", "chạy", "tạo",
-    "lên", "lỗi", "xem", "sửa", "kiểm", "tra", "đơn",
-})
-_IDENT_RE = re.compile(r"[_./:\-]|\d|[a-z][A-Z]")
-_WORD_RE = re.compile(r"[^\W\d_]+")
 
 
 def _split_top_level_alternatives(pattern: str) -> List[str]:
@@ -646,6 +704,38 @@ def derive_summary(base: Dict[str, Any], usd_per_mtok: float = DEFAULT_USD_PER_M
     }
 
 
+def _build_recovery_pattern(target_bin: str, failed_cmd: str, succeeded_cmd: str) -> Optional[str]:
+    """
+    Construct a contextualized regex pattern for auto-learned recoveries so bare binary
+    names like 'pytest' or 'npm' never fire on unrelated user prompts.
+    """
+    if lint_pattern(target_bin) is None:
+        return target_bin
+
+    shell_builtins = frozenset({"cd", "set", "export", "echo", "sudo", "time", "exec", "and", "then", "run"})
+    target_low = target_bin.lower()
+
+    # Priority 1: Context words/subcommands in failed_cmd (to match the prompt situation that failed)
+    tokens_failed = [
+        t.lstrip("-").lower() for t in re.findall(r"[a-zA-Z0-9_:-]{2,}", failed_cmd)
+        if t.lstrip("-").lower() not in shell_builtins and t.lstrip("-").lower() != target_low
+    ]
+    # Priority 2: Distinct flags/subcommands in succeeded_cmd
+    tokens_succeeded = [
+        t.lstrip("-").lower() for t in re.findall(r"[a-zA-Z0-9_:-]{2,}", succeeded_cmd)
+        if t.lstrip("-").lower() not in shell_builtins and t.lstrip("-").lower() != target_low and t.lstrip("-").lower() not in tokens_failed
+    ]
+
+    for tok in (tokens_failed + tokens_succeeded):
+        if len(tok) < 2:
+            continue
+        pat = f"({target_bin}.{{0,40}}({re.escape(tok)})|({re.escape(tok)}).{{0,40}}{target_bin})"
+        if lint_pattern(pat) is None:
+            return pat
+
+    return None
+
+
 class FactsEngine:
     def __init__(self, storage_path: Optional[Path] = None, global_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
@@ -782,7 +872,7 @@ class FactsEngine:
         for f in facts:
             if f.get("id") == fact_id:
                 f["attributed_hits"] = f.get("attributed_hits", 0) + 1
-                f["last_attributed_at"] = datetime.utcnow().isoformat() + "Z"
+                f["last_attributed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 updated = True
                 break
         if updated:
@@ -837,6 +927,12 @@ class FactsEngine:
         clean_fact = normalize_text(fact.strip().replace("\n", " "))
         if not clean_fact:
             raise ValueError("Fact content cannot be empty.")
+        if not force and category not in LINT_EXEMPT_CATEGORIES:
+            content_problem = lint_fact_content(clean_fact)
+            if content_problem:
+                raise ValueError(
+                    f"Fact '{clean_fact}' is rejected: {content_problem} (--force to override)."
+                )
         if len(clean_fact) > MAX_FACT_CHARS and not force:
             raise ValueError(
                 f"Fact is {len(clean_fact)} chars (max {MAX_FACT_CHARS}); it is injected on every hit, "
@@ -848,6 +944,7 @@ class FactsEngine:
         # same pattern is kept alongside (builtin hash() is per-process random, time() collides within 1s).
         fact_id = fact_id or "fact_" + hashlib.sha1(f"{pattern}\0{clean_fact}".encode("utf-8")).hexdigest()[:10]
 
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         new_entry = {
             "id": fact_id,
             "pattern": pattern,
@@ -857,8 +954,8 @@ class FactsEngine:
             "injected_tokens": 0,
             "saved_tokens": 0,
             "est_savings": est_savings,
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": now_iso,
+            "updated_at": now_iso,
         }
 
         facts = self._read(path)
@@ -895,21 +992,76 @@ class FactsEngine:
         return False
 
     @_facts_locked
+    def prune_facts(
+        self,
+        min_hits: int = 20,
+        max_attribution_rate: float = 0.0,
+        max_age_days: int = 30,
+        dry_run: bool = False,
+        scope: str = "project",
+    ) -> Tuple[List[Dict], List[Dict]]:
+        """
+        Prune low-utility or stale micro-facts to prevent long-term repository bloat.
+        Returns (pruned_facts, kept_facts).
+        """
+        path = self._scope_path(scope)
+        facts = self._read(path)
+        pruned = []
+        kept = []
+        now = datetime.now(timezone.utc)
+
+        for f in facts:
+            hits = f.get("hits", 0)
+            attr_hits = f.get("attributed_hits", 0)
+            attr_rate = (attr_hits / hits) if hits > 0 else 0.0
+
+            # Condition 1: High noise, zero utility (shown >= min_hits times, but rarely applied)
+            is_zero_utility = (hits >= min_hits and attr_rate <= max_attribution_rate)
+
+            # Condition 2: Stale with 0 hits after max_age_days
+            created_str = f.get("created_at")
+            is_stale = False
+            if created_str and hits == 0:
+                try:
+                    created_dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                    if (now - created_dt).days >= max_age_days:
+                        is_stale = True
+                except Exception:
+                    pass
+
+            if is_zero_utility or is_stale:
+                reason = "zero utility" if is_zero_utility else f"stale (> {max_age_days}d with 0 hits)"
+                f_copy = dict(f)
+                f_copy["prune_reason"] = reason
+                pruned.append(f_copy)
+            else:
+                kept.append(f)
+
+        if not dry_run and pruned:
+            self._write(path, kept)
+
+        return pruned, kept
+
+    @_facts_locked
     def match(
         self,
         text: str,
         record_hits: bool = True,
         max_facts: Optional[int] = None,
         exclude_categories: Optional[Set[str]] = None,
+        exclude_ids: Optional[List[str]] = None,
     ) -> List[Dict]:
-        """Match input text against patterns with optional capping and category filtering."""
+        """Match input text against patterns with optional capping, category filtering, and session deduplication."""
         if not text:
             return []
 
+        excluded = set(exclude_ids or [])
         facts = self.list_facts()
         candidates = []
 
         for f in facts:
+            if f.get("id") in excluded:
+                continue
             pattern = f.get("pattern", "")
             if not pattern:
                 continue
@@ -944,13 +1096,13 @@ class FactsEngine:
                 f["hits"] = f.get("hits", 0) + 1
                 f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
                 f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
-                f["last_hit_at"] = datetime.utcnow().isoformat() + "Z"
+                f["last_hit_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 total_injected_delta += tok_cost
                 total_saved_delta += tok_saved
                 needs_save = True
 
         if needs_save and record_hits:
-            header_tokens = 24  # "[CENTSIBLE MICRO-SKILLS...]" header overhead
+            header_tokens = 12  # "[CENTSIBLE MICRO-SKILLS: Active Repository Facts]" header overhead
             self._save_merged(facts)
             self.update_metrics(
                 prompt_injections=1,
@@ -1024,7 +1176,7 @@ class FactsEngine:
                         f["hits"] = f.get("hits", 0) + 1
                         f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
                         f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
-                        f["last_hit_at"] = datetime.utcnow().isoformat() + "Z"
+                        f["last_hit_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                         injected_delta += tok_cost
                         saved_delta += tok_saved
                         needs_save = True
@@ -1059,22 +1211,28 @@ class FactsEngine:
         if _extract_invocation_signature(failed_cmd, target_bin) == _extract_invocation_signature(succeeded_cmd, target_bin):
             return None
 
-        # Avoid overwriting manual facts for this binary
+        pattern = _build_recovery_pattern(target_bin, failed_cmd, succeeded_cmd)
+        if not pattern:
+            return None
+
+        # Avoid overwriting manual facts for this pattern
         for existing in self.list_facts():
-            if existing.get("pattern") == target_bin and existing.get("category") != "auto-learned":
+            if existing.get("pattern") == pattern and existing.get("category") != "auto-learned":
                 return None
 
         fact_text = redact_secrets(
             f"Use '{succeeded_cmd.strip()}' instead of '{failed_cmd.strip()}' when running {target_bin}."
         )
+        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", target_bin)[:32]
+        fact_id = f"auto_{slug}_{hashlib.sha1(pattern.encode('utf-8')).hexdigest()[:6]}"
         try:
             entry = self.add_fact(
-                pattern=target_bin,
+                pattern=pattern,
                 fact=fact_text,
                 category="auto-learned",
-                fact_id=f"auto_{target_bin}",
+                fact_id=fact_id,
             )
-        except ValueError:  # too long to be a one-line fact: pasted command chains are noise, not knowledge
+        except ValueError:  # rejects if pattern or fact doesn't pass strict zero-waste linting
             return None
         self.update_metrics(auto_learned_facts=1)
         return entry
@@ -1129,20 +1287,17 @@ class FactsEngine:
         correction_hint: Optional[str] = None,
         reflect_mode: Optional[str] = None,
     ) -> Optional[str]:
-        """Format matched facts and optional correction nudge into a single concise prompt injection block."""
+        """Format matched facts and optional correction nudge into an ultra-compact prompt injection block."""
         if not matched_facts and not correction_hint:
             return None
 
         lines: List[str] = []
         if matched_facts:
             lines.append("[CENTSIBLE MICRO-SKILLS: Active Repository Facts]")
-            lines.append("Apply the following verified facts for this turn to avoid repetitive search/execution:")
             for f in matched_facts:
                 lines.append(f"- {f.get('fact')}")
         if correction_hint:
             lines.append(correction_hint)
-        if reflect_mode == "inline":
-            lines.append("[Centsible Self-Learning] If you discover new repo quirks or command flags in this turn, save them via 'centsible facts add' before your final response.")
 
         return "\n".join(lines)
 

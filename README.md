@@ -3,7 +3,7 @@
 > **Experience-driven cost and token optimization for AI coding agents (Google Antigravity, Claude Code & OpenClaw)**  
 > *Make your AI agents work smart and save every token. Centsible = Sensible (smart reasoning) + Cent (cost efficiency).*
 
-[![Version: 0.6.4](https://img.shields.io/badge/Version-0.6.4-orange.svg)](#)
+[![Version: 0.7.0](https://img.shields.io/badge/Version-0.7.0-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.8+](https://img.shields.io/badge/Python-3.8+-green.svg)](https://www.python.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(Stdlib)-brightgreen.svg)](#)
@@ -26,16 +26,33 @@ AI agents burn thousands of tokens rediscovering repo facts, repeating failing c
 
 ## 🚀 Quickstart
 
+### 1-Line Universal Installer (Linux & macOS)
+```bash
+curl -fsSL https://raw.githubusercontent.com/ntrieuvi97/centsible/main/install.sh | bash
+source ~/.bashrc   # (or source ~/.zshrc on macOS) to refresh current terminal
+centsible stats
+```
+
 ### Claude Code
 ```text
 /plugin marketplace add ntrieuvi97/centsible
 /plugin install centsible@centsible
 ```
+*Claude Code users can run `/centsible-stats`, `/centsible-status`, `/centsible-harvest`, or `/centsible-config` directly in chat!*
 
 ### Google Antigravity
 ```bash
 git clone https://github.com/ntrieuvi97/centsible.git ~/.gemini/config/plugins/centsible
-ln -sf ~/.gemini/config/plugins/centsible/bin/centsible ~/.local/bin/centsible
+~/.gemini/config/plugins/centsible/install.sh
+source ~/.bashrc   # (or source ~/.zshrc on macOS)
+centsible stats
+```
+
+### Python (Universal / Windows)
+```bash
+pip install git+https://github.com/ntrieuvi97/centsible.git
+# Or inside a local clone: pip install -e .
+centsible stats
 ```
 
 ---
@@ -57,6 +74,7 @@ centsible facts add --pattern "rtk.{0,20}pytest" --fact "Prefix shell commands w
 # identifier (deploy_staging, run-e2e, a/b), a long unique word, or a tool plus a symptom. --force overrides.
 centsible facts list
 centsible facts test "How do I run tests?"
+centsible facts prune [--days 30] [--min-hits 20] [--dry-run]  # remove stale or zero-utility facts
 centsible facts remove <id_or_pattern>
 
 # Agentic fact harvesting (initial scan on fresh repo)
