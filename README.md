@@ -122,6 +122,12 @@ Facts live in the project's `.agents/` or `.claude/` dir when present, otherwise
 
 ---
 
+## 🌟 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ntrieuvi97/centsible&type=Date)](https://star-history.com/#ntrieuvi97/centsible&Date)
+
+---
+
 ## 🧪 Testing
 
 ```bash
