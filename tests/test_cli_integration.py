@@ -403,6 +403,49 @@ class TestCliIntegration(unittest.TestCase):
 
         get_state_path(cid).unlink(missing_ok=True)
 
+    def test_share_cli(self):
+        res = self._run_te(["share", "--json"])
+        self.assertEqual(res.returncode, 0)
+        data = json.loads(res.stdout)
+        self.assertIn("share_card", data)
+        self.assertIn("badge_markdown", data)
+        self.assertIn("twitter_share_url", data)
+
+        res_badge = self._run_te(["share", "--badge"])
+        self.assertEqual(res_badge.returncode, 0)
+        self.assertIn("img.shields.io", res_badge.stdout)
+
+        res_card = self._run_te(["share", "--card"])
+        self.assertEqual(res_card.returncode, 0)
+        self.assertIn("Centsible Token & Cost Savings Report", res_card.stdout)
+
+    def test_export_cli(self):
+        # Add a test fact first
+        res_add = self._run_te(["facts", "add", "--pattern", "pytest.{0,20}flag", "--fact", "Use pytest -q flag"])
+        self.assertEqual(res_add.returncode, 0)
+
+        # Test export markdown to stdout
+        res_md = self._run_te(["export", "--target", "markdown", "--stdout"])
+        self.assertEqual(res_md.returncode, 0)
+        self.assertIn("Use pytest -q flag", res_md.stdout)
+
+        # Test export cursor to stdout
+        res_cursor = self._run_te(["export", "--target", "cursor", "--stdout"])
+        self.assertEqual(res_cursor.returncode, 0)
+        self.assertIn("alwaysApply: true", res_cursor.stdout)
+        self.assertIn("Use pytest -q flag", res_cursor.stdout)
+
+        # Test export aider to stdout
+        res_aider = self._run_te(["export", "--target", "aider", "--stdout"])
+        self.assertEqual(res_aider.returncode, 0)
+        self.assertIn("Repository Conventions", res_aider.stdout)
+
+        # Test export json to stdout
+        res_json = self._run_te(["export", "--target", "json", "--stdout"])
+        self.assertEqual(res_json.returncode, 0)
+        facts = json.loads(res_json.stdout)
+        self.assertTrue(any("pytest" in f.get("pattern", "") for f in facts))
+
 
 if __name__ == "__main__":
     unittest.main()
