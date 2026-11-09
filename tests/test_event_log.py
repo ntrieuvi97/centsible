@@ -64,6 +64,18 @@ class TestEventLog(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["facts"]["f1"]["shown"], 1)
 
+    def test_cli_events_scoped_to_project(self):
+        log_event("prompt_inject", "s1", fact_ids=["mine"])
+        with open(self.home / "events.jsonl", "a") as f:  # legacy line without a project tag
+            f.write(json.dumps({"ts": "2999-01-01T00:00:00Z", "event": "hint", "session": "x", "fact_ids": ["other"]}) + "\n")
+        env = {**os.environ, "CENTSIBLE_HOME": str(self.home)}
+        def run(*extra):
+            out = subprocess.run([sys.executable, "-m", "core.cli", "events", "--json", *extra],
+                                 cwd=ROOT, capture_output=True, text=True, env=env)
+            return json.loads(out.stdout)["facts"]
+        self.assertEqual(set(run()), {"mine"})
+        self.assertEqual(set(run("--all")), {"mine", "other"})
+
 
 if __name__ == "__main__":
     unittest.main()

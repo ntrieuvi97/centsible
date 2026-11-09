@@ -32,6 +32,7 @@ def log_event(event: str, conversation_id: Optional[str] = None, **fields: Any) 
             "event": event,
             "session": conversation_id or "default",
             "agent": agent_from_conversation(conversation_id),
+            "project": Path.cwd().resolve().name,  # lets `events` match the per-project `stats`
         }
         record.update({k: v for k, v in fields.items() if v not in (None, "", [])})
         line = json.dumps(record, ensure_ascii=False) + "\n"
