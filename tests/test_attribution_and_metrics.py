@@ -204,6 +204,99 @@ class TestAttributionAndMetrics(unittest.TestCase):
         # 3. All returned are domain database facts
         self.assertTrue(all(f["category"] == "database" for f in matched))
 
+    def test_add_fact_preserves_attributed_hits_and_metadata_on_update(self):
+        self.engine.add_fact(
+            pattern=r"pytest.{0,20}tests",
+            fact="Run 'python3 -m pytest tests/'",
+            category="gotcha",
+            fact_id="f_preserve",
+        )
+        self.engine.update_fact_attribution("f_preserve")
+        self.engine.update_fact_attribution("f_preserve")
+        self.assertEqual(self.engine.get_fact("f_preserve")["attributed_hits"], 2)
+
+        # Updating the fact with the same ID must NOT reset attributed_hits to 0
+        updated = self.engine.add_fact(
+            pattern=r"pytest.{0,20}tests",
+            fact="MUST RUN: 'python3 -m pytest tests/ -q'",
+            category="gotcha",
+            fact_id="f_preserve",
+        )
+        self.assertEqual(updated["attributed_hits"], 2)
+        self.assertEqual(self.engine.get_fact("f_preserve")["attributed_hits"], 2)
+
+    def test_bayesian_utility_ranking_and_dead_fact_auto_suppression(self):
+        # Seed 3 facts:
+        # 1) Dead fact: 25 hits, 0 attributed_hits -> must be auto-suppressed!
+        # 2) Low-utility fact with longer pattern: 10 hits, 0 attributed_hits
+        # 3) Elite high-utility fact with shorter pattern: 10 hits, 9 attributed_hits
+        raw_facts = [
+            {
+                "id": "f_dead",
+                "pattern": "deploy_service_alpha_beta_gamma",
+                "fact": "Dead fact that was never applied",
+                "category": "gotcha",
+                "hits": 25,
+                "attributed_hits": 0,
+            },
+            {
+                "id": "f_low_util",
+                "pattern": "deploy_service_alpha",
+                "fact": "Low utility fact",
+                "category": "gotcha",
+                "hits": 10,
+                "attributed_hits": 0,
+            },
+            {
+                "id": "f_elite_util",
+                "pattern": "deploy_service",
+                "fact": "High utility elite fact",
+                "category": "gotcha",
+                "hits": 10,
+                "attributed_hits": 9,
+            },
+        ]
+        self.storage_path.write_text(
+            "\n".join(json.dumps(r) for r in raw_facts) + "\n", encoding="utf-8"
+        )
+
+        matched = self.engine.match(
+            "please run deploy_service and deploy_service_alpha and deploy_service_alpha_beta_gamma now",
+            record_hits=False,
+            max_facts=2,
+        )
+        matched_ids = [f["id"] for f in matched]
+        # Dead fact (25 hits, 0 attributed) must be suppressed automatically
+        self.assertNotIn("f_dead", matched_ids)
+        # Elite fact must rank #1 ahead of low-utility fact despite shorter pattern
+        self.assertEqual(matched_ids[0], "f_elite_util")
+
+    def test_auto_learn_from_recovery_rejects_heredocs_and_noisy_chains(self):
+        # 1) Inline heredoc script must be rejected
+        heredoc_cmd = "python3 - <<'EOF'\nopen('a.py').write('x')\nEOF"
+        self.assertIsNone(self.engine.auto_learn_from_recovery("python3 a.py", heredoc_cmd))
+
+        # 2) Multi-command semicolon / head inspection chain must be rejected
+        chain_cmd = "ls -la | head -20; pytest tests/ -q"
+        self.assertIsNone(self.engine.auto_learn_from_recovery("pytest tests/", chain_cmd))
+
+        # 3) Clean CLI recovery with distinct flags is still learned
+        clean = self.engine.auto_learn_from_recovery("pytest tests/unit", "pytest tests/unit --override-ini=addopts=")
+        self.assertIsNotNone(clean)
+
+    def test_check_fact_attribution_matches_technical_identifiers_in_fact_body(self):
+        fact = {
+            "id": "f_arch",
+            "pattern": "video-agent|anime",
+            "fact": "Always configure AnimeLayerCompositor with floating_cards enabled.",
+        }
+        # Tool call edits compositor.py with AnimeLayerCompositor (doesn't mention 'video-agent' or 'anime')
+        tool_call = {
+            "name": "edit_file",
+            "args": {"Path": "src/compositor.py", "Replacement": "comp = AnimeLayerCompositor(floating_cards=True)"},
+        }
+        self.assertTrue(check_fact_attribution(fact, tool_call, is_success=True))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ from core.fact_helpers import (  # noqa: F401  re-exported: other modules and te
     atomic_write_text,
     bound_wildcards,
     check_fact_attribution,
+    compute_fact_utility,
     contextualize_pattern,
     debug_warn,
     derive_summary,
@@ -46,7 +47,9 @@ from core.fact_helpers import (  # noqa: F401  re-exported: other modules and te
     fold_vietnamese,
     get_default_facts_path,
     get_global_facts_path,
+    is_dead_fact,
     is_fact_missing_in_command,
+    is_noisy_recovery_command,
     is_prescribed_command_present,
     lint_fact_content,
     lint_pattern,
@@ -283,9 +286,13 @@ class FactsEngine:
         for i, existing in enumerate(facts):
             if existing.get("id") == fact_id:
                 new_entry["hits"] = existing.get("hits", 0)
+                new_entry["attributed_hits"] = existing.get("attributed_hits", 0)
                 new_entry["injected_tokens"] = existing.get("injected_tokens", 0)
                 new_entry["saved_tokens"] = existing.get("saved_tokens", 0)
                 new_entry["created_at"] = existing.get("created_at", new_entry["created_at"])
+                for preserved_key in ("last_hit_at", "last_attributed_at", "generation", "parent_id", "mutation_note", "failures"):
+                    if preserved_key in existing:
+                        new_entry[preserved_key] = existing[preserved_key]
                 facts[i] = new_entry
                 updated = True
                 break
@@ -382,6 +389,8 @@ class FactsEngine:
         for f in facts:
             if f.get("id") in excluded:
                 continue
+            if is_dead_fact(f):
+                continue
             pattern = f.get("pattern", "")
             if not pattern:
                 continue
@@ -395,12 +404,17 @@ class FactsEngine:
             except re.error:
                 continue
 
-        # If capped, prioritize: 'always' facts first, then most specific (longer) patterns
-        if max_facts and len(candidates) > max_facts:
+        # Prioritize: 'always' facts first, then Bayesian utility score + pattern specificity
+        if len(candidates) > 1:
             always = [f for f in candidates if f.get("category") == "always" or f.get("pattern") == "*"]
             others = [f for f in candidates if f not in always]
-            others.sort(key=lambda x: len(x.get("pattern", "")), reverse=True)
-            candidates = (always + others)[:max_facts]
+            others.sort(
+                key=lambda x: (round(compute_fact_utility(x), 4), len(x.get("pattern", ""))),
+                reverse=True,
+            )
+            candidates = always + others
+        if max_facts and len(candidates) > max_facts:
+            candidates = candidates[:max_facts]
 
         if not candidates:
             return []
@@ -476,6 +490,8 @@ class FactsEngine:
             fid = f.get("id")
             if fid in excluded:
                 continue
+            if is_dead_fact(f):
+                continue
             pattern = f.get("pattern", "")
             if not pattern or pattern == "*":
                 continue
@@ -520,6 +536,8 @@ class FactsEngine:
         using the same CLI tool succeeds with different flags or runner prefix.
         """
         if not failed_cmd or not succeeded_cmd or failed_cmd.strip() == succeeded_cmd.strip():
+            return None
+        if is_noisy_recovery_command(failed_cmd) or is_noisy_recovery_command(succeeded_cmd):
             return None
 
         # Same tool in both commands, even behind wrappers ('cd x && rtk proxy pytest', 'python3 -m pytest')

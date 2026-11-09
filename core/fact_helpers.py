@@ -442,7 +442,47 @@ def check_fact_attribution(
         if regex_matches(pattern, target_text):
             return True
 
+    # 4. Technical identifier match from fact directive body (e.g. class names, module files, snake_case symbols)
+    if is_success and fact_text:
+        tech_targets = _extract_correction_targets(fact_text)
+        for tok in tech_targets:
+            if len(tok) >= 4 and tok.lower() not in COMMON_BINS and tok in combined_args:
+                return True
+
     return False
+
+
+DEAD_FACT_MIN_HITS = 20
+
+_NOISY_RECOVERY_RE = re.compile(
+    r"(?:<<['\"]?[A-Za-z0-9_]+|\b(?:python3?|node|ruby)\s+-(?:c|e)\b|\|\s*(?:head|tail|wc)\b|\bls\s+-[a-zA-Z]*[la])"
+)
+
+
+def is_noisy_recovery_command(cmd: str) -> bool:
+    """Return True if a command is a one-off script, heredoc, or multi-step exploratory chain unsuitable for auto-learning."""
+    if not cmd:
+        return True
+    s = cmd.strip()
+    if len(s) > 140 or "\n" in s or ";" in s:
+        return True
+    return bool(_NOISY_RECOVERY_RE.search(s))
+
+
+def compute_fact_utility(fact: Dict[str, Any]) -> float:
+    """Compute Laplace-smoothed Bayesian attribution utility in (0.0, 1.0]."""
+    hits = max(0, int(fact.get("hits", 0)))
+    applied = max(0, int(fact.get("attributed_hits", 0)))
+    return (applied + 1.0) / (hits + 2.0)
+
+
+def is_dead_fact(fact: Dict[str, Any], min_hits: int = DEAD_FACT_MIN_HITS) -> bool:
+    """Return True when a non-always fact has been shown >= min_hits times with 0 attributed applications."""
+    if fact.get("category") == "always" or fact.get("pattern") == "*":
+        return False
+    hits = int(fact.get("hits", 0))
+    applied = int(fact.get("attributed_hits", 0))
+    return hits >= min_hits and applied == 0
 
 
 def get_default_facts_path(workspace_paths: Optional[List[str]] = None) -> Path:
