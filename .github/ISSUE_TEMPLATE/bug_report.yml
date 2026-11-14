@@ -1,0 +1,27 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: "Centsible version, Python version, OS"
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "Redact secrets before pasting. Fact files and event logs under `~/.centsible/` can contain repo details. Redact before sharing."

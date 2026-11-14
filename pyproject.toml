@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "centsible"
 version = "0.8.0"
-description = "Experience-driven cost and token optimization for AI coding agents (Antigravity & Claude Code)"
+description = "Repo memory and loop guard for AI coding agents, with savings reported as verified vs estimated. Zero dependencies."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -18,6 +18,10 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Quality Assurance",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ntrieuvi97/centsible"
+Issues = "https://github.com/ntrieuvi97/centsible/issues"
 
 [project.scripts]
 centsible = "centsible.__main__:main"
