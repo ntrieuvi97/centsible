@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
-    { name = "Vi Nguyen", url = "https://github.com/ntrieuvi97" }
+    { name = "Vi Nguyen" }
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
