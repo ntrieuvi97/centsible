@@ -139,7 +139,7 @@ class TestCliIntegration(unittest.TestCase):
             "facts", "add",
             "--pattern", "bruno",
             "--force",
-            "--fact", "Use --compact flag on staging",
+            "--fact", "Use --compact flag on UAT",
             "--category", "always",
             "--id", "fact-bruno",
         ])
@@ -160,11 +160,11 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("injectSteps", data)
         self.assertEqual(len(data["injectSteps"]), 1)
         self.assertIn("ephemeralMessage", data["injectSteps"][0])
-        self.assertIn("Use --compact flag on staging", data["injectSteps"][0]["ephemeralMessage"])
+        self.assertIn("Use --compact flag on UAT", data["injectSteps"][0]["ephemeralMessage"])
 
     def _pre_tool(self, conversation_id, **extra):
         payload = {
-            "toolCall": {"name": "exec", "args": {"command": "bruno run staging"}},
+            "toolCall": {"name": "exec", "args": {"command": "bruno run uat"}},
             "conversationId": conversation_id,
             "workspacePaths": [self.temp_dir.name],
             **extra,
@@ -175,7 +175,7 @@ class TestCliIntegration(unittest.TestCase):
 
     def test_pre_tool_hint_blocks_by_default_but_not_when_host_can_attach_it(self):
         self._run_te([
-            "facts", "add", "--pattern", "bruno.{0,30}(run|staging)",
+            "facts", "add", "--pattern", "bruno.{0,30}(run|uat)",
             "--fact", "Append --compact to bruno commands", "--category", "tool", "--id", "f-bruno",
         ])
         run_id = uuid.uuid4().hex  # guard state outlives the temp dir, so ids must be unique per run

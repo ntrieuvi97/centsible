@@ -98,23 +98,23 @@ class TestFactsEngine(unittest.TestCase):
     def test_match_tool_call_missing_vs_present_flags(self):
         self.engine.add_fact(
             "bruno",
-            "Append --compact to Bruno commands on staging",
-            fact_id="bruno-condense",
+            "Append --compact to Bruno commands on UAT",
+            fact_id="bruno-quiet",
             force=True,
         )
         # Missing --compact -> triggers tool hint
-        missing_call = {"name": "run_command", "args": {"CommandLine": "bruno run staging"}}
+        missing_call = {"name": "run_command", "args": {"CommandLine": "bruno run uat"}}
         matched = self.engine.match_tool_call(missing_call)
         self.assertEqual(len(matched), 1)
-        self.assertEqual(matched[0]["id"], "bruno-condense")
+        self.assertEqual(matched[0]["id"], "bruno-quiet")
 
         # Already has --compact -> no redundant hint
-        valid_call = {"name": "run_command", "args": {"CommandLine": "bruno run staging --compact"}}
+        valid_call = {"name": "run_command", "args": {"CommandLine": "bruno run uat --compact"}}
         matched_valid = self.engine.match_tool_call(valid_call)
         self.assertEqual(len(matched_valid), 0)
 
         # Already injected in prompt (exclude_ids) -> skipped
-        matched_excluded = self.engine.match_tool_call(missing_call, exclude_ids=["bruno-condense"])
+        matched_excluded = self.engine.match_tool_call(missing_call, exclude_ids=["bruno-quiet"])
         self.assertEqual(len(matched_excluded), 0)
 
     def test_auto_learn_from_recovery_and_metrics_roi(self):
@@ -467,7 +467,7 @@ class TestPatternSpecificity(unittest.TestCase):
             self.assertTrue(regex_matches(entry["pattern"], "run pytest without flags"))
             self.assertIsNone(engine.auto_learn_from_correction("never use pip"))
 
-    def test_specificity_cases_from_the_qc_repo(self):
+    def test_specificity_cases_from_a_real_repo(self):
         """Prompts the old keyword patterns wrongly fired on must not match the tightened ones."""
         with tempfile.TemporaryDirectory() as tmp:
             engine = FactsEngine(Path(tmp) / "facts.jsonl")

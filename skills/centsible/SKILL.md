@@ -54,7 +54,7 @@ centsible facts add --pattern "<regex_pattern>" --fact "<one_line_fact>"
 Examples:
 ```bash
 centsible facts add --pattern "pytest.{0,40}(fail|error|slow)" --fact "Run unit tests with 'pytest tests/ -q --tb=short'."
-centsible facts add --pattern "bruno.{0,30}(run|staging|staging)" --fact "Append --compact to Bruno commands to save 80% JSON tokens."
+centsible facts add --pattern "docker.{0,30}(build|compose)" --fact "Pass --progress=plain to docker build to keep logs short."
 centsible facts add --pattern "auth/login\.py" --fact "Never mutate token keys directly."
 ```
 
@@ -63,7 +63,7 @@ rejected (exit 2) for a lone short word (`pytest`, `bruno`, `pip`), for generic 
 facts over 240 characters. Anchor on, in order of strength:
 1. an identifier: file, script, table, API path or flag (`deploy_staging`, `run-e2e`, `a/b.py`);
 2. a tool plus a symptom (`pytest.{0,40}(fail|error)`);
-3. an action plus object plus context (`(create|book).{0,12}order.{0,40}(staging|staging)`).
+3. an action plus object plus context (`(create|book).{0,12}order.{0,40}(uat|stg)`).
 
 Before saving, check a couple of prompts that must not match with `centsible facts test "<prompt>"`.
 `--force` overrides the check; use it only when the pattern is deliberately broad.

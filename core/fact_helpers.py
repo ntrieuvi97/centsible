@@ -250,7 +250,7 @@ def lint_pattern(pattern: str) -> Optional[str]:
     """Return why `pattern` would fire on unrelated prompts, or None when it is specific enough.
 
     Every top-level alternative needs an anchor: an identifier-like token (`deploy_staging`, `run-e2e`,
-    `supplier_id`, `a/b`), a long unique word, or a combination of several non-generic words
+    `user_id`, `a/b`), a long unique word, or a combination of several non-generic words
     (`pytest.{0,40}(spawn|fail)`: a tool plus a symptom). A lone short word (`pip`, `rtk`, `helm`) or only generic words
     (`run.*test`) is rejected, because it matches questions and unrelated work.
     """

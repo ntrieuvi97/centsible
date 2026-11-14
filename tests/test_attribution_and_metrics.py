@@ -42,7 +42,7 @@ class TestAttributionAndMetrics(unittest.TestCase):
 
     def test_check_fact_attribution_flags(self):
         fact = {
-            "id": "f_condense",
+            "id": "f_quiet",
             "pattern": "bruno",
             "fact": "Append --compact to Bruno commands to save 80% JSON tokens.",
         }
@@ -65,7 +65,7 @@ class TestAttributionAndMetrics(unittest.TestCase):
         fact = {
             "id": "f_passcode",
             "pattern": "passcode|login",
-            "fact": "staging passcode '111111' là mật khẩu cố định (KHÔNG phải OTP).",
+            "fact": "UAT passcode '111111' là mật khẩu cố định (KHÔNG phải OTP).",
         }
         tool_call = {
             "name": "run_command",
