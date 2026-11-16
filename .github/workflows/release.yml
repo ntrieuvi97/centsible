@@ -1,0 +1,23 @@
+name: Release to PyPI
+
+# Runs when a GitHub release is published. Needs a PyPI "trusted publisher" for this repo/workflow
+# (pypi.org -> project -> Publishing); no API token is stored here.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build pytest
+      - run: python -m pip install -e . && python -m pytest -q
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1

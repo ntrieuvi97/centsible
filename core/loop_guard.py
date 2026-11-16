@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from core.event_log import log_event
 from core.facts_engine import (
     DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
+    DEFAULT_TOOL_ERROR_MARKERS,
     FactsEngine,
     atomic_write_text,
     check_fact_attribution,
@@ -23,6 +24,8 @@ from core.facts_engine import (
     estimate_tokens,
     file_lock,
     find_common_bin,
+    redact_secrets,
+    tool_call_signature,
 )
 
 STOP_NUDGE_MIN_FAILURES = 2  # tool failures before the Stop hook asks the agent for gotchas
@@ -55,14 +58,15 @@ CONFIG_KEYS = {
     "max_consecutive_errors": "CENTSIBLE_MAX_CONSECUTIVE_ERRORS",
     "max_identical_calls": "CENTSIBLE_MAX_IDENTICAL_CALLS",
     "min_recovery_failures": "CENTSIBLE_MIN_RECOVERY_FAILURES",
+    "min_tool_recovery_failures": "CENTSIBLE_MIN_TOOL_RECOVERY_FAILURES",
 }
 MODE_ENV = "CENTSIBLE_LOOP_MODE"
 DEFAULT_MODE = "normal"
 # ultra = trips early, weak = tolerant of long debugging streaks.
 MODES = {
-    "ultra": {"max_consecutive_errors": 2, "max_identical_calls": 3, "min_recovery_failures": 2},
-    "normal": {"max_consecutive_errors": 3, "max_identical_calls": 4, "min_recovery_failures": 2},
-    "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5, "min_recovery_failures": 1},
+    "ultra": {"max_consecutive_errors": 2, "max_identical_calls": 3, "min_recovery_failures": 2, "min_tool_recovery_failures": 1},
+    "normal": {"max_consecutive_errors": 3, "max_identical_calls": 4, "min_recovery_failures": 2, "min_tool_recovery_failures": 1},
+    "weak": {"max_consecutive_errors": 4, "max_identical_calls": 5, "min_recovery_failures": 1, "min_tool_recovery_failures": 1},
 }
 
 REFLECT_ENV = "CENTSIBLE_REFLECT"
@@ -187,6 +191,13 @@ def resolve_threshold(key: str) -> int:
     return MODES[resolve_mode()][key]
 
 
+def resolve_error_markers() -> List[str]:
+    """Lowercase error-text markers for tool-level recovery learning: config.json `tool_error_markers` (a list), else the defaults."""
+    raw = load_config().get("tool_error_markers")
+    markers = [m.lower() for m in raw if isinstance(m, str) and m] if isinstance(raw, list) else []
+    return markers or list(DEFAULT_TOOL_ERROR_MARKERS)
+
+
 def normalize_command(cmd: str) -> str:
     """Normalize CLI command string by stripping cosmetic flags and extra whitespace."""
     if not cmd:
@@ -216,6 +227,17 @@ def extract_error_from_payload(payload: Dict[str, Any]) -> Optional[str]:
             return f"exit code {code}"
 
     resp = payload.get("tool_response") or payload.get("toolResult") or payload.get("output")
+    if isinstance(resp, list):
+        # MCP content blocks: Claude Code reports a tool that answers `{"error":true,"message":...}` as a success.
+        for block in resp:
+            text = block.get("text") if isinstance(block, dict) else None
+            if isinstance(text, str) and text.lstrip().startswith("{"):
+                try:
+                    body = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(body, dict) and body.get("error") is True:
+                    return str(body.get("message") or "tool error")
     if isinstance(resp, dict):
         if resp.get("error"):
             return str(resp["error"])
@@ -322,6 +344,7 @@ class LoopGuard:
             "recent_call_hashes": [],
             "read_cache_counts": {},
             "last_failed_cmd": None,
+            "last_failed_call": None,
             "calls_since_failed_cmd": 0,
             "injected_fact_ids": [],
             "attributed_fact_ids": [],
@@ -596,6 +619,14 @@ class LoopGuard:
             if cmd:
                 state["last_failed_cmd"] = cmd
                 state["calls_since_failed_cmd"] = 0
+            # Any tool, shell or not: only tool name, arg names and id-like non-secret values are kept.
+            prev_call = state.get("last_failed_call") or {}
+            state["last_failed_call"] = dict(
+                tool_call_signature(tool_name, args),
+                error=redact_secrets(str(error))[:300],
+                failures=prev_call.get("failures", 0) + 1 if prev_call.get("tool") == tool_name else 1,
+                at=state.get("session_tool_calls", 0),
+            )
             if engine:
                 m_updates = {"tool_calls_total": 1, "tool_calls_failed": 1}
                 if is_cmd:
@@ -609,6 +640,15 @@ class LoopGuard:
             tool_name_cur = tool_call.get("name", "")
             failed_cmd = state.get("last_failed_cmd")
             failed_streak = state.get("failed_cmd_streak", 0)
+            failed_call = state.get("last_failed_call")
+            if failed_call and failed_call.get("tool") == tool_name_cur:
+                fresh = state.get("session_tool_calls", 0) - failed_call.get("at", 0) <= RECOVERY_WINDOW
+                if engine and fresh and failed_call.get("failures", 1) >= resolve_threshold("min_tool_recovery_failures"):
+                    engine.auto_learn_from_tool_recovery(
+                        failed_call, tool_call_signature(tool_name_cur, args), failed_call.get("error", ""),
+                        markers=resolve_error_markers(),
+                    )
+                state["last_failed_call"] = None
             if tool_name_cur in MUTATING_TOOLS:
                 # Code/config was modified after failure -> failure was likely a code bug, not a CLI quirk
                 state["last_failed_cmd"] = None
@@ -651,7 +691,7 @@ class LoopGuard:
         history.append({
             "tool": tool_name,
             "error": bool(error),
-            "error_msg": str(error)[:100] if error else None,
+            "error_msg": redact_secrets(str(error))[:100] if error else None,
         })
         state["history"] = history[-20:]
         if state.get("last_failed_cmd") and not error:

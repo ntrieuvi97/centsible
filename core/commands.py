@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.transcript import _parse_ts, analyze_transcript, claude_project_dir, compare_baseline
+from core.fact_audit import replay_facts, verify_facts
 from core.event_log import read_events, summarize_events
 from core.facts_engine import FactsEngine, derive_summary, get_global_facts_path
 from core.loop_guard import (AUTO_LEARN_ENV, CONFIG_KEYS, INJECT_CHOICES, INJECT_ENV, MODE_ENV, MODES, REFLECT_ENV, get_config_path, load_config, normalize_reflect_mode, resolve_inject_mode, resolve_mode, resolve_reflect, resolve_threshold, save_config)
@@ -118,7 +120,10 @@ def cmd_facts(args, engine, facts_parser) -> int:
         for f in facts:
             tag = " [global]" if f.get("_scope") == "global" else ""
             print(f"• [{f.get('id')}]{tag} (category: {f.get('category', 'general')}, hits: {f.get('hits', 0)})")
-            print(f"  Pattern: {f.get('pattern')}")
+            if f.get("pattern") or not f.get("tool"):
+                print(f"  Pattern: {f.get('pattern')}")
+            if f.get("tool"):
+                print(f"  Tool:    {f['tool']}" + (f" (args: {', '.join(f['arg_keys'])})" if f.get("arg_keys") else ""))
             print(f"  Fact:    {f.get('fact')}\n")
         return 0
 
@@ -131,11 +136,12 @@ def cmd_facts(args, engine, facts_parser) -> int:
                 fact_id=args.id,
                 scope="global" if args.is_global else "project",
                 force=args.force,
+                tool=args.tool,
             )
         except ValueError as e:
             print(f"✗ Not saved: {e}", file=sys.stderr)
             return 2
-        print(f"✓ Added micro-fact [{entry['id']}]: '{entry['fact']}' (Trigger: {entry['pattern']})")
+        print(f"✓ Added micro-fact [{entry['id']}]: '{entry['fact']}' (Trigger: {entry['pattern'] or 'tool ' + entry['tool']})")
         return 0
 
     elif args.facts_action == "remove":
@@ -174,9 +180,59 @@ def cmd_facts(args, engine, facts_parser) -> int:
             print("\nRun without --dry-run to commit deletion.")
         return 0
 
+    elif args.facts_action == "verify":
+        return _facts_verify(args, engine)
+
+    elif args.facts_action == "replay":
+        return _facts_replay(args, engine)
+
     else:
         facts_parser.print_help()
         return 1
+
+
+def _repo_root(explicit: str = "") -> Path:
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and out.stdout.strip():
+            return Path(out.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return Path.cwd()
+
+
+def _facts_verify(args, engine) -> int:
+    facts = engine.list_facts()
+    issues = verify_facts(facts, _repo_root(args.root))
+    if args.json:
+        print(json.dumps(issues, indent=2, ensure_ascii=False))
+    elif not issues:
+        print(f"✓ {len(facts)} fact(s) checked, every named file and command was found.")
+    else:
+        for i in issues:
+            print(f"{'✗' if i['level'] == 'stale' else '!'} [{i['id']}] {i['message']}")
+        print(f"\n{len(facts)} fact(s) checked. '✗' = stale (fix or `centsible facts remove <id>`), '!' = tool missing on this machine only.")
+    return 1 if any(i["level"] == "stale" for i in issues) else 0
+
+
+def _facts_replay(args, engine) -> int:
+    tdir = Path(args.transcripts).expanduser() if args.transcripts else claude_project_dir(Path.cwd())
+    if not tdir.is_dir():
+        print(f"✗ No transcripts at {tdir} (pass --transcripts DIR).", file=sys.stderr)
+        return 1
+    result = replay_facts(engine.list_facts(), tdir, args.days)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    t = result["totals"]
+    print(f"=== Facts Replay === {t['sessions']} session(s), {t['prompts']} prompt(s), {t['tool_calls']} tool call(s) from {tdir}")
+    for r in sorted(result["facts"], key=lambda r: r["verdict"] == "ok"):
+        print(f"• [{r['id']}] prompts: {r['prompt_fires']}  tool calls: {r['tool_fires']}  (needed: {r['tool_needed']})  sessions: {r['sessions']}")
+        print(f"  {r['verdict']}")
+    print("\nReplay shows when a pattern would fire, not whether the agent used the fact; see `centsible stats` for attribution.")
+    return 0
 
 
 def cmd_status(args, engine) -> int:

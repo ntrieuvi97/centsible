@@ -4,16 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "centsible"
-version = "0.8.0"
+version = "0.9.0"
 description = "Repo memory and loop guard for AI coding agents, with savings reported as verified vs estimated. Zero dependencies."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Vi Nguyen" }
 ]
+keywords = ["claude-code", "ai-agents", "agent-memory", "loop-guard", "token-savings"]
 classifiers = [
+    "Development Status :: 4 - Beta",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Software Development :: Quality Assurance",
@@ -29,3 +35,6 @@ centsible = "centsible.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["core*", "centsible*"]
+
+[tool.setuptools.package-data]
+core = ["triggers.json"]

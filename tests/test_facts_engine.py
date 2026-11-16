@@ -548,5 +548,89 @@ class TestPatternSpecificity(unittest.TestCase):
             self.assertEqual(engine.list_facts()[0]["id"], f2["id"])
 
 
+class TestLocaleTriggers(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.engine = FactsEngine(Path(self.tmp.name) / "facts.jsonl")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_rules_in_many_languages_are_learned(self):
+        prompts = [
+            "No uses `db_migrate.py` para borrar datos de producción",    # es
+            "Nunca edite `settings_prod.py` diretamente neste projeto",   # pt
+            "Ne modifie pas `legacy_core.py` sans prévenir l'équipe",     # fr
+            "Verwende nie `deploy_all.sh` auf dem Hauptzweig",            # de
+            "不要修改 `config_loader.py` 文件",                           # zh (short CJK rule)
+            "`build_all.sh` は絶対に実行しないで",                        # ja
+            "`pkg_lock.json` 파일은 절대 수정하지 마",                    # ko
+            "Jangan ubah `routes_main.py` tanpa review dulu",             # id
+        ]
+        for p in prompts:
+            self.assertIsNotNone(self.engine.auto_learn_from_correction(p), p)
+
+    def test_questions_are_not_learned(self):
+        for p in ["为什么 config_loader.py 不要修改呢", "¿Por qué no usar db_migrate.py en producción?",
+                  "Warum nie `deploy_all.sh` benutzen aber trotzdem", "何故 build_all.sh は絶対に動かないの"]:
+            self.assertIsNone(self.engine.auto_learn_from_correction(p), p)
+
+    def test_user_triggers_file_adds_a_language(self):
+        from core import fact_helpers
+        home = Path(self.tmp.name)
+        import json
+        (home / "triggers.json").write_text(
+            json.dumps({"xx": {"correction": [r"zorg\s+voor"], "question_start": []}}), encoding="utf-8")
+        old = os.environ.get("CENTSIBLE_HOME")
+        os.environ["CENTSIBLE_HOME"] = str(home)
+        try:
+            q, c = fact_helpers._compile_triggers(fact_helpers._load_trigger_tables())
+            self.assertTrue(c.search("zorg voor deploy_all.sh"))
+        finally:
+            if old is None:
+                os.environ.pop("CENTSIBLE_HOME")
+            else:
+                os.environ["CENTSIBLE_HOME"] = old
+
+    def test_invalid_fragment_is_skipped(self):
+        from core import fact_helpers
+        q, c = fact_helpers._compile_triggers([{"correction": ["(", "ok\\s+now"], "question_start": ["("]}])
+        self.assertTrue(c.search("ok now"))
+
+
+class TestStatsSidecar(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "facts.jsonl"
+        self.engine = FactsEngine(self.path)
+        self.engine.add_fact("deploy_staging", "Run make deploy-staging.", fact_id="d")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_hits_do_not_touch_facts_file(self):
+        before = self.path.read_text(encoding="utf-8")
+        self.engine.match("please deploy_staging now")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), before)
+        self.assertNotIn("hits", before)
+        self.assertEqual(self.engine.get_fact("d")["hits"], 1)
+        self.assertTrue((self.path.parent / "facts.stats.json").exists())
+
+    def test_legacy_inline_counters_migrate_on_write(self):
+        self.path.write_text(
+            '{"id": "d", "pattern": "deploy_staging", "fact": "Run make deploy-staging.", "hits": 7}\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(self.engine.get_fact("d")["hits"], 7)
+        self.engine.match("deploy_staging")
+        self.assertEqual(self.engine.get_fact("d")["hits"], 8)
+        self.assertNotIn("hits", self.path.read_text(encoding="utf-8"))
+
+    def test_remove_fact_drops_its_stats(self):
+        self.engine.match("deploy_staging")
+        self.engine.remove_fact("d")
+        self.assertFalse((self.path.parent / "facts.stats.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

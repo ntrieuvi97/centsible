@@ -1,0 +1,93 @@
+{
+  "en": {
+    "correction": [
+      "no,\\s*(?:use|don't|do not|never|always)",
+      "(?:don't|do not|never)\\s+(?:use|edit|modify|touch|run|delete|commit)",
+      "always\\s+(?:use|run|keep|pass)",
+      "remember\\s+(?:to|that)",
+      "gotcha:",
+      "rule:"
+    ],
+    "question_start": ["why", "how", "what", "when", "where", "who", "should", "can", "could", "would"]
+  },
+  "vi": {
+    "correction": [
+      "không phải", "sai rồi", "nhầm rồi",
+      "đừng\\s+(?:dùng|sửa|chạy|xóa|gọi|đụng|thay đổi)",
+      "tuyệt đối không", "cấm\\s+(?:dùng|sửa|chạy|xóa)",
+      "lưu ý(?:\\s*:|\\s+là)?", "nhớ\\s+là", "quy tắc(?:\\s*:|\\s+là)?",
+      "bắt buộc\\s+phải", "luôn\\s+phải", "mặc định\\s+(?:là|phải)"
+    ],
+    "question_start": ["tại sao", "vì sao", "làm sao", "như thế nào", "có nên", "khi nào", "ở đâu", "ai", "cái gì"]
+  },
+  "es": {
+    "correction": [
+      "no\\s+(?:uses|usar|edites|editar|modifiques|modificar|toques|tocar|ejecutes|ejecutar|borres|borrar)",
+      "nunca\\s+(?:uses|usar|edites|modifiques|toques|ejecutes|borres)",
+      "siempre\\s+(?:usa|usar|ejecuta|ejecutar|pasa|pasar)",
+      "recuerda\\s+(?:que|usar)", "regla\\s*:", "ojo\\s*:"
+    ],
+    "question_start": ["por qué", "cómo", "qué", "cuándo", "dónde", "quién", "debería", "puedo"]
+  },
+  "pt": {
+    "correction": [
+      "não\\s+(?:use|usar|edite|editar|modifique|toque|rode|execute|apague)",
+      "nunca\\s+(?:use|edite|modifique|toque|rode|execute|apague)",
+      "sempre\\s+(?:use|rode|execute|passe)",
+      "lembre-se\\s+(?:de|que)", "regra\\s*:"
+    ],
+    "question_start": ["por que", "porquê", "como", "quando", "onde", "quem", "devo", "posso", "o que"]
+  },
+  "fr": {
+    "correction": [
+      "n'utilise\\s+pas", "n'utilisez\\s+pas",
+      "ne\\s+(?:modifie|modifiez|touche|touchez|lance|lancez|supprime|supprimez)\\s+pas",
+      "jamais\\s+(?:utiliser|modifier|toucher|lancer|supprimer)",
+      "toujours\\s+(?:utiliser|lancer|passer)", "n'oublie\\s+pas", "règle\\s*:"
+    ],
+    "question_start": ["pourquoi", "comment", "quand", "où", "qui", "quoi", "dois-je", "peux-tu"]
+  },
+  "de": {
+    "correction": [
+      "nicht\\s+(?:verwenden|benutzen|ändern|bearbeiten|anfassen|ausführen|löschen)",
+      "(?:niemals|nie)\\s+(?:verwenden|benutzen|ändern|bearbeiten|anfassen|ausführen|löschen)",
+      "(?:verwende|benutze|ändere|bearbeite|lösche|führe)\\s+(?:\\S+\\s+)?(?:nie|niemals|nicht)\\b",
+      "immer\\s+(?:verwenden|benutzen|ausführen|nutzen)", "denk\\s+daran", "regel\\s*:"
+    ],
+    "question_start": ["warum", "wie", "was", "wann", "wo", "wer", "soll", "kann"]
+  },
+  "ru": {
+    "correction": [
+      "не\\s+(?:используй|изменяй|трогай|запускай|удаляй|редактируй)",
+      "никогда\\s+не", "всегда\\s+(?:используй|запускай|добавляй)", "помни", "правило\\s*:"
+    ],
+    "question_start": ["почему", "как", "что", "когда", "где", "кто", "можно ли"]
+  },
+  "id": {
+    "correction": [
+      "jangan\\s+(?:pakai|gunakan|ubah|edit|sentuh|jalankan|hapus)",
+      "selalu\\s+(?:pakai|gunakan|jalankan)", "ingat\\s+(?:bahwa|untuk)", "aturan\\s*:"
+    ],
+    "question_start": ["kenapa", "mengapa", "bagaimana", "apa", "kapan", "dimana", "siapa"]
+  },
+  "zh": {
+    "correction": [
+      "不要(?:用|使用|修改|改|动|碰|运行|执行|删除)", "千万不要", "禁止(?:使用|修改|运行|删除)",
+      "必须(?:使用|用|运行|执行)", "一定要", "总是(?:使用|用|运行)", "记住", "注意[:：]", "规则[:：]", "不是这样", "错了"
+    ],
+    "question_start": ["为什么", "为何", "怎么", "如何", "什么", "是否", "能不能", "可以"]
+  },
+  "ja": {
+    "correction": [
+      "(?:使わ|変更し|編集し|触ら|実行し|削除し)ないで", "絶対に", "必ず(?:使|実行|付け)", "常に", "覚えて",
+      "注意[:：]", "ルール[:：]", "間違い"
+    ],
+    "question_start": ["なぜ", "どうして", "どう", "何", "いつ", "どこ", "誰"]
+  },
+  "ko": {
+    "correction": [
+      "(?:사용|수정|편집|건드리|실행|삭제)하?지\\s*(?:마|말)", "절대", "반드시", "항상", "기억해", "주의\\s*:", "규칙\\s*:"
+    ],
+    "question_start": ["왜", "어떻게", "무엇", "언제", "어디", "누가"]
+  }
+}

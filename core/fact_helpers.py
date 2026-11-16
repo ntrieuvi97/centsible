@@ -346,6 +346,27 @@ def redact_secrets(text: str) -> str:
     return text
 
 
+# Error-text markers that make "same tool, one id value changed" a learnable recovery (override: config `tool_error_markers`).
+DEFAULT_TOOL_ERROR_MARKERS = ("not granted", "explicitly granted", "denied", "forbidden", "unauthorized", "not allowed", "no access", "not found", "invalid")
+_FREE_TEXT_KEYS = frozenset({
+    "command", "CommandLine", "path", "file_path", "Path", "TargetFile", "SearchPath",
+    "query", "content", "prompt", "text", "old_string", "new_string",
+})
+_ID_VALUE_RE = re.compile(r"[\w-]{12,64}")  # opaque ids (uuid, slug); short keys like AP-123 are lookups, not recoveries
+
+
+def tool_call_signature(tool: str, args: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What PostToolUse remembers of a call: tool, sorted arg names, and only id-like scalar values that are not
+    secret-looking (free text, paths, commands and anything redact_secrets would mask are dropped)."""
+    args = args or {}
+    vals = {
+        k: v for k, v in args.items()
+        if k not in _FREE_TEXT_KEYS and isinstance(v, str) and _ID_VALUE_RE.fullmatch(v)
+        and redact_secrets(f"{k}={v}") == f"{k}={v}"
+    }
+    return {"tool": tool, "keys": sorted(args), "vals": vals}
+
+
 def extract_fact_prescriptions(fact_text: str) -> Tuple[List[str], List[str]]:
     """
     Extract prescribed CLI flags and quoted values/identifiers from fact text,
@@ -411,7 +432,7 @@ def check_fact_attribution(
     flags, quoted = extract_fact_prescriptions(fact_text)
 
     args = tool_call.get("args") or {}
-    arg_parts: List[str] = []
+    arg_parts: List[str] = list(args) if fact.get("tool") else []  # tool facts can prescribe an arg NAME
     for k, v in args.items():
         if isinstance(v, (str, int, float, bool)):
             arg_parts.append(str(v))
@@ -603,28 +624,51 @@ def _extract_invocation_signature(cmd: str, target_bin: str) -> Optional[tuple]:
     return None
 
 
-_QUESTION_START_RE = re.compile(
-    r"^\s*(?:tại sao|vì sao|làm sao|như thế nào|có nên|khi nào|ở đâu|ai\b|cái gì|"
-    r"why|how|what|when|where|who|should|can|could|would)\b",
-    re.IGNORECASE,
-)
+def _load_trigger_tables() -> List[Dict[str, Any]]:
+    """Bundled locale tables (core/triggers.json) plus an optional user file ($CENTSIBLE_HOME/triggers.json,
+    same schema) so any language can be added without a release."""
+    tables: List[Dict[str, Any]] = []
+    env_home = os.environ.get("CENTSIBLE_HOME")
+    user_file = (Path(env_home).expanduser() if env_home else Path.home() / ".centsible") / "triggers.json"
+    for path in (Path(__file__).with_name("triggers.json"), user_file):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            if path.exists():
+                debug_warn(f"triggers({path.name})", e)
+            continue
+        tables.extend(t for t in data.values() if isinstance(t, dict))
+    return tables
 
-_CORRECTION_TRIGGER_RE = re.compile(
-    r"(?:^|\b)(?:"
-    r"không phải|sai rồi|nhầm rồi|"
-    r"đừng\s+(?:dùng|sửa|chạy|xóa|gọi|đụng|thay đổi)|"
-    r"tuyệt đối không|cấm\s+(?:dùng|sửa|chạy|xóa)|"
-    r"lưu ý(?:\s*:|\s+là)?|nhớ\s+là|quy tắc(?:\s*:|\s+là)?|"
-    r"bắt buộc\s+phải|luôn\s+phải|mặc định\s+(?:là|phải)|"
-    r"no,\s*(?:use|don't|do not|never|always)|"
-    r"don't\s+(?:use|edit|modify|touch|run)|"
-    r"do not\s+(?:use|edit|modify|touch|run)|"
-    r"never\s+(?:use|edit|modify|touch|run)|"
-    r"always\s+(?:use|run|keep|pass)|"
-    r"remember\s+(?:to|that)|gotcha:|rule:"
-    r")",
-    re.IGNORECASE,
-)
+
+def _compile_triggers(tables: List[Dict[str, Any]]) -> Tuple["re.Pattern[str]", "re.Pattern[str]"]:
+    """(question_start, correction) regexes; a fragment that is not valid regex is skipped, not fatal."""
+    def valid(fragments: Any) -> List[str]:
+        out = []
+        for frag in fragments if isinstance(fragments, list) else []:
+            try:
+                re.compile(frag)
+                out.append(frag)
+            except (re.error, TypeError) as e:
+                debug_warn("triggers(fragment)", e)
+        return out
+
+    question = [f for t in tables for f in valid(t.get("question_start"))]
+    correction = [f for t in tables for f in valid(t.get("correction"))]
+    # (?<![A-Za-z]) / (?![A-Za-z]) instead of \b: CJK has no word boundaries, Latin words must not match mid-word.
+    return (
+        re.compile(r"^\s*(?:" + "|".join(question or ["(?!)"]) + r")(?![A-Za-z])", re.IGNORECASE),
+        re.compile(r"(?<![A-Za-z])(?:" + "|".join(correction or ["(?!)"]) + r")", re.IGNORECASE),
+    )
+
+
+_QUESTION_START_RE, _CORRECTION_TRIGGER_RE = _compile_triggers(_load_trigger_tables())
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def min_rule_chars(text: str, default: int) -> int:
+    """CJK carries a whole rule in far fewer characters."""
+    return min(default, 8) if _CJK_RE.search(text) else default
 
 
 def _extract_correction_targets(prompt: str) -> List[str]:
@@ -668,10 +712,10 @@ def detect_user_correction(prompt: str) -> Optional[str]:
     Detect if a user prompt states a correction, rule, or gotcha.
     Returns a concise capture nudge if detected, or None.
     """
-    if not prompt or "?" in prompt:
+    if not prompt or "?" in prompt or "\uff1f" in prompt:
         return None
     norm = normalize_text(prompt.strip())
-    if len(norm) < 12 or _QUESTION_START_RE.search(norm):
+    if len(norm) < min_rule_chars(norm, 12) or _QUESTION_START_RE.search(norm):
         return None
     if not _CORRECTION_TRIGGER_RE.search(norm):
         return None

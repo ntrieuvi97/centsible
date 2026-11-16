@@ -47,7 +47,8 @@ def build_parser():
 
     # facts add
     facts_add = facts_sub.add_parser("add", help="Add or update a micro-fact")
-    facts_add.add_argument("--pattern", "-p", required=True, help="Regex pattern or keyword to trigger")
+    facts_add.add_argument("--pattern", "-p", default="", help="Regex pattern or keyword to trigger (required unless --tool is given)")
+    facts_add.add_argument("--tool", help="Regex on the tool name (e.g. '^mcp__openclaw__exec$'): the fact fires on a matching tool call, not on prompts")
     facts_add.add_argument("--fact", "-f", required=True, help="One-line fact to inject")
     facts_add.add_argument("--category", "-c", default="general", help="Category tag")
     facts_add.add_argument("--id", help="Optional explicit ID")
@@ -69,6 +70,17 @@ def build_parser():
     facts_prune.add_argument("--min-hits", type=int, default=20, help="Prune facts with >= N hits but 0% attribution (default: 20)")
     facts_prune.add_argument("--dry-run", action="store_true", help="Preview facts to prune without deleting")
     facts_prune.add_argument("--global", dest="is_global", action="store_true", help="Prune global facts file")
+
+    # facts verify
+    facts_verify = facts_sub.add_parser("verify", help="Check that files and commands named in facts still exist (exit 1 if any path is stale)")
+    facts_verify.add_argument("--root", help="Repo root to resolve paths against (default: git root or current directory)")
+    facts_verify.add_argument("--json", action="store_true", help="Output issues as JSON")
+
+    # facts replay
+    facts_replay = facts_sub.add_parser("replay", help="Replay past Claude Code sessions against each fact's pattern (never fires / too broad / redundant)")
+    facts_replay.add_argument("--transcripts", help="Dir of session transcripts (.jsonl); default: this repo's Claude Code transcripts")
+    facts_replay.add_argument("--days", type=int, default=30, help="Only sessions modified in the last N days (default: 30)")
+    facts_replay.add_argument("--json", action="store_true", help="Output results as JSON")
 
     # status command
     subparsers.add_parser("status", help="Show system status and facts count")

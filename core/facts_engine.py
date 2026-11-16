@@ -23,6 +23,7 @@ from core.fact_helpers import (  # noqa: F401  re-exported: other modules and te
     DEFAULT_MAX_PROMPT_FACTS,
     DEFAULT_SAVED_TOKENS_PER_HIT,
     DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
+    DEFAULT_TOOL_ERROR_MARKERS,
     DEFAULT_USD_PER_MTOK,
     GENERIC_TERMS,
     LINT_EXEMPT_CATEGORIES,
@@ -53,10 +54,21 @@ from core.fact_helpers import (  # noqa: F401  re-exported: other modules and te
     is_prescribed_command_present,
     lint_fact_content,
     lint_pattern,
+    min_rule_chars,
     normalize_text,
     redact_secrets,
     regex_matches,
+    tool_call_signature,
 )
+
+
+# Per-fact counters live in a local sidecar (`facts.stats.json`), not in the committed facts file,
+# so hook activity never dirties git. Facts with inline counters from older versions migrate on next write.
+STAT_KEYS = ("hits", "attributed_hits", "injected_tokens", "saved_tokens", "last_hit_at", "last_attributed_at", "failures")
+
+
+def stats_path_for(path: Path) -> Path:
+    return path.with_name(path.stem + ".stats.json")
 
 
 class FactsEngine:
@@ -147,7 +159,7 @@ class FactsEngine:
 
     @staticmethod
     def _read(path: Optional[Path]) -> List[Dict]:
-        """Raw facts of one file; unreadable lines are skipped."""
+        """Facts of one file with their counters from the stats sidecar; unreadable lines are skipped."""
         if not path or not path.exists():
             return []
         facts = []
@@ -160,6 +172,16 @@ class FactsEngine:
                     facts.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
+        stats = {}
+        try:
+            stats = json.loads(stats_path_for(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+        for fact in facts:
+            if isinstance(stats.get(fact.get("id")), dict):
+                fact.update(stats[fact["id"]])  # sidecar wins over legacy inline counters
+            for k in ("hits", "injected_tokens", "saved_tokens"):
+                fact.setdefault(k, 0)
         return facts
 
     def list_facts(self, category: Optional[str] = None, scope: Optional[str] = None) -> List[Dict]:
@@ -215,27 +237,38 @@ class FactsEngine:
         est_savings: int = DEFAULT_SAVED_TOKENS_PER_HIT,
         scope: str = "project",
         force: bool = False,
+        tool: Optional[str] = None,
+        arg_keys: Optional[List[str]] = None,
     ) -> Dict:
         """Add or update a micro-fact in the project file, or the global one with scope='global'.
 
         Rejects patterns that would fire on unrelated prompts and facts too long to be worth injecting
         on every hit; `force=True` skips both checks.
+        `tool` (regex on the tool name) and `arg_keys` make a fact fire on a matching PreToolUse call; with
+        `tool` set the prompt `pattern` may be empty (the fact then never fires on prompts).
         """
         path = self._scope_path(scope)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
 
-        if len(pattern) > 500:
+        if not pattern and not tool:
+            raise ValueError("A fact needs a pattern or a tool regex.")
+        if len(pattern) > 500 or len(tool or "") > 500:
             raise ValueError("Regex pattern is too long (maximum 500 characters).")
-        if not force and category not in LINT_EXEMPT_CATEGORIES:
-            problem = lint_pattern(pattern)
+        if tool:
+            try:
+                re.compile(tool, re.IGNORECASE)
+            except re.error as e:
+                raise ValueError(f"Invalid tool regex '{tool}': {e}")
+        for label, rx in (("Pattern", pattern), ("Tool regex", tool)):
+            problem = None if force or not rx or category in LINT_EXEMPT_CATEGORIES else lint_pattern(rx)
             if problem:
                 raise ValueError(
-                    f"Pattern '{pattern}' is too loose: {problem}. Match the situation, not a keyword, e.g. "
+                    f"{label} '{rx}' is too loose: {problem}. Match the situation, not a keyword, e.g. "
                     "'pytest.{0,40}(fail|error)' or an identifier like 'deploy_staging' (--force to override)."
                 )
 
-        if pattern != "*":
+        if pattern and pattern != "*":
             try:
                 compiled = re.compile(pattern, re.IGNORECASE)
             except re.error as e:
@@ -280,6 +313,10 @@ class FactsEngine:
             "created_at": now_iso,
             "updated_at": now_iso,
         }
+        if tool:
+            new_entry["tool"] = tool
+            if arg_keys:
+                new_entry["arg_keys"] = sorted(arg_keys)
 
         facts = self._read(path)
         updated = False
@@ -476,8 +513,7 @@ class FactsEngine:
             or ""
         )
         target_text = f"{cmd_text} {path_text}".strip()
-        if not target_text:
-            return []
+        tool_name = str(tool_call.get("name") or "")
 
         excluded = set(exclude_ids or [])
         facts = self.list_facts()
@@ -493,29 +529,40 @@ class FactsEngine:
             if is_dead_fact(f):
                 continue
             pattern = f.get("pattern", "")
-            if not pattern or pattern == "*":
+            tool_rx = f.get("tool")
+            if not tool_rx and (not pattern or pattern == "*" or not target_text):
                 continue
             category = f.get("category", "general")
             try:
-                if regex_matches(pattern, target_text):
-                    # For CLI commands with non-rule/gotcha facts, only fire if prescribed flags/subcommands are missing.
-                    # For file/path tools (Read/Edit/Write) or explicit 'rule'/'gotcha' facts, fire once per session!
-                    if cmd_text and category not in ("rule", "gotcha"):
-                        if only_missing_flags and not is_fact_missing_in_command(f.get("fact", ""), cmd_text):
-                            continue
-                    elif cmd_text and only_missing_flags and is_prescribed_command_present(f.get("fact", ""), cmd_text):
+                if tool_rx:
+                    # Tool facts match the tool name (+ optional arg names, + optional pattern on command/path text) and
+                    # fire once per session, like rule/gotcha facts.
+                    if (
+                        not re.search(tool_rx, tool_name, re.IGNORECASE)
+                        or not set(f.get("arg_keys") or []) <= set(args)
+                        or (pattern and pattern != "*" and not regex_matches(pattern, target_text))
+                    ):
                         continue
-                    matched.append(f)
-                    if record_hits:
-                        tok_cost = estimate_tokens(f.get("fact", "")) + 4
-                        tok_saved = f.get("est_savings", DEFAULT_SAVED_TOKENS_PER_HIT)
-                        f["hits"] = f.get("hits", 0) + 1
-                        f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
-                        f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
-                        f["last_hit_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                        injected_delta += tok_cost
-                        saved_delta += tok_saved
-                        needs_save = True
+                elif not regex_matches(pattern, target_text):
+                    continue
+                # For CLI commands with non-rule/gotcha facts, only fire if prescribed flags/subcommands are missing.
+                # For file/path tools (Read/Edit/Write) or explicit 'rule'/'gotcha' facts, fire once per session!
+                elif cmd_text and category not in ("rule", "gotcha"):
+                    if only_missing_flags and not is_fact_missing_in_command(f.get("fact", ""), cmd_text):
+                        continue
+                elif cmd_text and only_missing_flags and is_prescribed_command_present(f.get("fact", ""), cmd_text):
+                    continue
+                matched.append(f)
+                if record_hits:
+                    tok_cost = estimate_tokens(f.get("fact", "")) + 4
+                    tok_saved = f.get("est_savings", DEFAULT_SAVED_TOKENS_PER_HIT)
+                    f["hits"] = f.get("hits", 0) + 1
+                    f["injected_tokens"] = f.get("injected_tokens", 0) + tok_cost
+                    f["saved_tokens"] = f.get("saved_tokens", 0) + tok_saved
+                    f["last_hit_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                    injected_delta += tok_cost
+                    saved_delta += tok_saved
+                    needs_save = True
             except re.error:
                 continue
 
@@ -575,16 +622,79 @@ class FactsEngine:
         self.update_metrics(auto_learned_facts=1)
         return entry
 
+    def auto_learn_from_tool_recovery(
+        self,
+        failed_call: Dict[str, Any],
+        succeeded_call: Dict[str, Any],
+        error_text: str,
+        markers: Optional[List[str]] = None,
+    ) -> Optional[Dict]:
+        """
+        Learn a tool-level fix from a clean single-variable recovery of the SAME tool. Calls are
+        `tool_call_signature` dicts. Learns only when
+        (b) one arg name was renamed and the error text names both (timeout -> timeoutSeconds), or
+        (c) one id-like arg value changed, the failed value is in the error text and the error carries a
+            denied/not-granted/not-found/invalid marker (wrong cloudId).
+        A tool-name-only change (`exec` -> `mcp__openclaw__exec`) is not learnable: Claude Code fires no hook for it.
+        """
+        tool = failed_call.get("tool")
+        if not tool or tool != succeeded_call.get("tool"):
+            return None
+        err = error_text or ""
+        failed_keys, ok_keys = set(failed_call.get("keys", [])), set(succeeded_call.get("keys", []))
+        removed, added = failed_keys - ok_keys, ok_keys - failed_keys
+        if len(removed) == 1 and len(added) == 1:
+            old, new = removed.pop(), added.pop()
+            if not all(re.search(rf"\b{re.escape(k)}\b", err) for k in (old, new)):
+                return None
+            kind, key, arg_keys, text = "rename", f"{old}>{new}", [old], f'{tool}: pass "{new}" instead of "{old}".'
+        elif not removed and not added:
+            bad_vals, good_vals = failed_call.get("vals", {}), succeeded_call.get("vals", {})
+            changed = [k for k in good_vals if k in bad_vals and bad_vals[k] != good_vals[k]]
+            low = err.lower()
+            if len(changed) != 1 or not any(m in low for m in (markers or DEFAULT_TOOL_ERROR_MARKERS)):
+                return None
+            key = changed[0]
+            if bad_vals[key] not in err:
+                return None
+            kind, arg_keys = "value", [key]
+            text = f'{tool}: use {key}="{good_vals[key]}" instead of {bad_vals[key]}.'
+        else:
+            return None
+
+        text = redact_secrets(text)
+        if len(text) > MAX_FACT_CHARS:
+            return None
+        tool_rx = "^" + re.escape(tool) + "$"
+        slug = re.sub(r"[^a-zA-Z0-9_-]", "_", tool)[:32]
+        fact_id = f"auto_tool_{slug}_{hashlib.sha1(chr(0).join((tool, kind, key)).encode('utf-8')).hexdigest()[:6]}"
+        existing = self.list_facts()
+        for e in existing:  # never overwrite a hand-written fact for this id or this tool+args
+            if e.get("category") != "auto-learned" and (
+                e.get("id") == fact_id or (e.get("tool") == tool_rx and e.get("arg_keys") == sorted(arg_keys))
+            ):
+                return None
+        try:
+            entry = self.add_fact(
+                pattern="", fact=text, category="auto-learned",
+                fact_id=fact_id, tool=tool_rx, arg_keys=arg_keys,
+            )
+        except ValueError:  # bare/generic tool name or fact rejected by lint
+            return None
+        if not any(e.get("id") == fact_id for e in existing):
+            self.update_metrics(auto_learned_facts=1)
+        return entry
+
     def auto_learn_from_correction(self, prompt: str) -> Optional[Dict]:
         """
         Automatically extract and store a domain/file 'gotcha' micro-fact when the user explicitly
         states a concise correction or rule with concrete technical targets (files, modules, CLI tools).
         """
-        if not prompt or "?" in prompt:
+        if not prompt or "?" in prompt or "\uff1f" in prompt:
             return None
         norm = normalize_text(prompt.strip().replace("\n", " "))
         # Only auto-persist concise single-rule directives (15..240 chars), never questions or long logs
-        if len(norm) < 15 or len(norm) > 240 or _QUESTION_START_RE.search(norm):
+        if len(norm) < min_rule_chars(norm, 15) or len(norm) > 240 or _QUESTION_START_RE.search(norm):
             return None
         if not _CORRECTION_TRIGGER_RE.search(norm):
             return None
@@ -663,8 +773,25 @@ class FactsEngine:
                     json.loads(s)
                 except json.JSONDecodeError:
                     kept.append(s)
-        body = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in facts)
-        atomic_write_text(path, "".join(k + "\n" for k in kept) + body)
+        stats = {
+            f["id"]: {k: f[k] for k in STAT_KEYS if f.get(k)}
+            for f in facts if f.get("id") and any(f.get(k) for k in STAT_KEYS)
+        }
+        body = "".join(
+            json.dumps({k: v for k, v in item.items() if k not in STAT_KEYS}, ensure_ascii=False) + "\n"
+            for item in facts
+        )
+        text = "".join(k + "\n" for k in kept) + body
+        # Skip identical rewrites: counters change on every hit, the facts file should not.
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            atomic_write_text(path, text)
+        sp = stats_path_for(path)
+        stats_text = json.dumps(stats, ensure_ascii=False, indent=0, sort_keys=True)
+        if stats:
+            if not sp.exists() or sp.read_text(encoding="utf-8") != stats_text:
+                atomic_write_text(sp, stats_text)
+        elif sp.exists():
+            sp.unlink()
 
     def _save_merged(self, facts: List[Dict]) -> None:
         """Persist a merged view (callers hold both locks): project facts to the project file, global ones
