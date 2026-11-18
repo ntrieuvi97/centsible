@@ -3,7 +3,7 @@
 **Repo memory and loop guard for AI coding agents, with savings reported as *verified* vs *estimated*.** Centsible stores one-line repo facts, injects each only when the situation matches, stops runaway retry loops, and tells you how many tokens it actually saved. Standard library only.
 
 [![CI](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml/badge.svg)](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml)
-[![Version: 0.10.1](https://img.shields.io/badge/Version-0.10.1-orange.svg)](#)
+[![Version: 0.11.0](https://img.shields.io/badge/Version-0.11.0-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-green.svg)](https://www.python.org/)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
@@ -52,7 +52,16 @@ Results depend on fact quality. Across a set of 9 mixed repositories (3,425 tool
 /plugin install centsible@centsible
 ```
 
-Then use `/centsible-stats`, `/centsible-status`, `/centsible-harvest` or `/centsible-config` in chat.
+Then use `/centsible-stats`, `/centsible-status`, `/centsible-harvest`, `/centsible-config` or `/centsible-update` in chat.
+
+### Updating
+
+```bash
+centsible update           # updates every install it finds: Claude Code plugin, git clones (install.sh / Antigravity), pip
+centsible update --check   # only show installed vs. latest versions
+```
+
+A git clone with local edits is skipped, never overwritten. Restart Claude Code after the plugin updates.
 
 ### One-line installer (Linux and macOS)
 
@@ -99,6 +108,7 @@ centsible stats                   # see what it saved
 
 ```bash
 centsible status
+centsible update [--check] [--dry-run]                  # update every install (plugin, git, pip) to the latest release
 centsible stats [--all] [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--since 2026-11-04] [--no-baseline]
 centsible events [--days 7] [--agent main] [--json]    # hint/block/apply counts; flags facts shown >=20x but never applied
 

@@ -31,6 +31,7 @@ from core.hooks import (
 from core.install import ensure_cli_symlink, handle_install, print_hermes_hooks
 from core.share import handle_export, handle_share
 from core.transcript import analyze_transcript, claude_project_dir, compare_baseline  # noqa: F401  re-exported for tests
+from core.update import run_update
 
 HERMES_HOOKS = {
     "hermes-prompt": handle_hook_hermes_prompt,
@@ -48,6 +49,9 @@ def main() -> int:
         if args.hermes:
             return print_hermes_hooks()
         return handle_install(dry_run=args.dry_run)
+
+    if args.command == "update":
+        return run_update(check=args.check, dry_run=args.dry_run)
 
     # Route hook commands
     if args.command == "hook":

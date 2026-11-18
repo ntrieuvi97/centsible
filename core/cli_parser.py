@@ -142,6 +142,11 @@ def build_parser():
     install_parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying files")
     install_parser.add_argument("--hermes", action="store_true", help="Print the Hermes config.yaml `hooks:` block for this install (edits nothing)")
 
+    # update command
+    update_parser = subparsers.add_parser("update", help="Update every centsible install on this machine (git, pip, Claude Code plugin)")
+    update_parser.add_argument("--check", action="store_true", help="Only show installed vs. latest versions")
+    update_parser.add_argument("--dry-run", action="store_true", help="Print the update commands without running them")
+
     # share command
     share_parser = subparsers.add_parser("share", help="Generate shareable savings card, badges, and social post")
     share_parser.add_argument("--card", action="store_true", help="Print ASCII share card only")
