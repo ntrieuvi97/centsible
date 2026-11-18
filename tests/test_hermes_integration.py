@@ -27,7 +27,7 @@ class TestHermesIntegration(unittest.TestCase):
         env["CENTSIBLE_HOME"] = self.dir
         return subprocess.run([sys.executable, str(REPO_ROOT / "core" / "cli.py")] + args,
                               input=json.dumps(payload) if payload is not None else None,
-                              capture_output=True, text=True, cwd=self.dir, env=env)
+                              capture_output=True, text=True, encoding="utf-8", cwd=self.dir, env=env)
 
     def _hook(self, sub, payload):
         res = self._run(["hook", sub], payload)

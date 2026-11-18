@@ -59,7 +59,7 @@ class TestEventLog(unittest.TestCase):
         env = {**os.environ, "CENTSIBLE_HOME": str(self.home)}
         out = subprocess.run(
             [sys.executable, "-m", "core.cli", "events", "--json"],
-            cwd=ROOT, capture_output=True, text=True, env=env,
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8", env=env,
         )
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(json.loads(out.stdout)["facts"]["f1"]["shown"], 1)
@@ -71,7 +71,7 @@ class TestEventLog(unittest.TestCase):
         env = {**os.environ, "CENTSIBLE_HOME": str(self.home)}
         def run(*extra):
             out = subprocess.run([sys.executable, "-m", "core.cli", "events", "--json", *extra],
-                                 cwd=ROOT, capture_output=True, text=True, env=env)
+                                 cwd=ROOT, capture_output=True, text=True, encoding="utf-8", env=env)
             return json.loads(out.stdout)["facts"]
         self.assertEqual(set(run()), {"mine"})
         self.assertEqual(set(run("--all")), {"mine", "other"})

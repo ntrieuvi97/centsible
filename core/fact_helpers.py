@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import sys
+import time
 import unicodedata
 from contextlib import contextmanager, ExitStack
 from pathlib import Path
@@ -150,15 +151,50 @@ def debug_warn(where: str, exc: BaseException) -> None:
         sys.stderr.write(f"[centsible:debug] {where}: {type(exc).__name__}: {exc}\n")
 
 
+LOCK_TIMEOUT_S = 10.0
+
+
 @contextmanager
 def file_lock(path: Path):
     """Exclusive cross-process lock around read-modify-write of `path` (sidecar `<name>.lock`).
 
-    shortcut: best-effort, no-op where fcntl is missing (Windows) or the dir is unwritable.
+    POSIX uses flock; Windows uses msvcrt byte-range locking on the sidecar. If the lock cannot be taken within
+    LOCK_TIMEOUT_S (or the dir is unwritable) the block runs unlocked: a hook must never hang the agent.
     """
+    lock_path = path.with_name(path.name + ".lock")
+    if os.name == "nt":
+        try:
+            import msvcrt
+            fh = open(lock_path, "a+")
+        except (ImportError, OSError):
+            yield
+            return
+        locked = False
+        try:
+            deadline = time.monotonic() + LOCK_TIMEOUT_S
+            while True:
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.005)
+            yield
+        finally:
+            if locked:
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
+            fh.close()
+        return
     try:
         import fcntl
-        fh = open(path.with_name(path.name + ".lock"), "a")
+        fh = open(lock_path, "a")
     except (ImportError, OSError):
         yield
         return
