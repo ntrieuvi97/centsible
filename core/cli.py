@@ -41,7 +41,21 @@ HERMES_HOOKS = {
 }
 
 
+def _utf8_stdio() -> None:
+    """Windows consoles and pipes default to a legacy code page (cp1252), so printing the report glyphs or a
+    Vietnamese fact crashes with UnicodeEncodeError, and a hook's UTF-8 JSON stdin is mis-decoded. Agents read
+    and write hook JSON as UTF-8 on every OS."""
+    for name, errors in (("stdin", "strict"), ("stdout", "replace"), ("stderr", "replace")):
+        stream = getattr(sys, name, None)
+        if stream is not None and hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
+            try:
+                stream.reconfigure(encoding="utf-8", errors=errors)
+            except (ValueError, OSError):
+                pass
+
+
 def main() -> int:
+    _utf8_stdio()
     parser, hook_parser, facts_parser = build_parser()
     args = parser.parse_args()
 

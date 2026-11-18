@@ -5,6 +5,7 @@ CLI and Hook integration tests.
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -38,7 +39,7 @@ class TestCliIntegration(unittest.TestCase):
             cmd,
             input=stdin_data,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             cwd=self.temp_dir.name,
             env=custom_env,
         )
@@ -216,6 +217,7 @@ class TestCliIntegration(unittest.TestCase):
         self.assertIn("Tokens Saved:", res.stdout)
         self.assertIn("mode normal: 4 identical, 3 errors", res.stdout)
 
+    @unittest.skipIf(os.name == "nt", "Windows cannot execute the extension-less launcher; it ships bin/centsible.cmd")
     def test_symlinked_bin_execution(self):
         # Verify bin/centsible works when invoked via a symlink in another directory (e.g. ~/.local/bin/centsible)
         symlink_path = Path(self.temp_dir.name) / "centsible_link"
@@ -223,7 +225,7 @@ class TestCliIntegration(unittest.TestCase):
         res = subprocess.run(
             [str(symlink_path), "stats"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             cwd=self.temp_dir.name,
         )
         self.assertEqual(res.returncode, 0)
@@ -239,7 +241,7 @@ class TestCliIntegration(unittest.TestCase):
         res_m = subprocess.run(
             [sys.executable, "-m", "centsible", "status"],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             cwd=str(REPO_ROOT),
         )
         self.assertEqual(res_m.returncode, 0)

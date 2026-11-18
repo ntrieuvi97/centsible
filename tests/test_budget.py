@@ -114,7 +114,7 @@ class TestClaudeBudgetHook(unittest.TestCase):
             payload = {"session_id": "budget-claude", "cwd": d, "tool_name": "Bash",
                        "tool_input": {"command": "ls"}, "transcript_path": str(transcript)}
             res = subprocess.run([sys.executable, str(REPO_ROOT / "core" / "cli.py"), "hook", "claude-pre-tool"],
-                                 input=json.dumps(payload), capture_output=True, text=True, cwd=d, env=env)
+                                 input=json.dumps(payload), capture_output=True, text=True, encoding="utf-8", cwd=d, env=env)
             self.assertEqual(res.returncode, 2)
             self.assertIn("3,500/2,000 tokens (measured from transcript)", res.stderr)
 

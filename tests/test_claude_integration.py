@@ -4,6 +4,7 @@ Integration tests for Claude Code hooks.
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -35,7 +36,7 @@ class TestClaudeIntegration(unittest.TestCase):
             cmd,
             input=stdin_data,
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             cwd=self.temp_dir.name,
             env=custom_env,
         )
@@ -264,6 +265,7 @@ class TestClaudeIntegration(unittest.TestCase):
         get_state_path(sid_hook).unlink(missing_ok=True)
         get_state_path(sid_off).unlink(missing_ok=True)
 
+    @unittest.skipIf(os.name == "nt", "the hook command is POSIX shell syntax; Claude Code on Windows runs it via Git Bash")
     def test_claude_native_plugin_manifests_and_plugin_root_hook(self):
         plugin_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
         marketplace_manifest = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
@@ -283,7 +285,7 @@ class TestClaudeIntegration(unittest.TestCase):
             shell=True,
             input=json.dumps({"prompt": "hello", "cwd": self.temp_dir.name}),
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8",
             env=env,
         )
         self.assertEqual(res.returncode, 0)
