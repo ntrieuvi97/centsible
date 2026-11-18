@@ -331,7 +331,7 @@ class TestCliIntegration(unittest.TestCase):
         # 1. Harvest when empty
         res = self._run_te(["harvest"])
         self.assertEqual(res.returncode, 0)
-        self.assertIn("To harvest 5-8 golden architectural facts", res.stdout)
+        self.assertIn("To harvest up to 5 non-obvious facts", res.stdout)
         self.assertIn("Type '/centsible-harvest'", res.stdout)
 
         # 2. Harvest --prompt
@@ -355,7 +355,7 @@ class TestCliIntegration(unittest.TestCase):
         # 4. Harvest with --force overrides active facts check
         res_force = self._run_te(["harvest", "--force"])
         self.assertEqual(res_force.returncode, 0)
-        self.assertIn("To harvest 5-8 golden architectural facts", res_force.stdout)
+        self.assertIn("To harvest up to 5 non-obvious facts", res_force.stdout)
 
     def test_antigravity_stop_hook_self_learning(self):
         cid = f"agy_stop_{id(self)}"

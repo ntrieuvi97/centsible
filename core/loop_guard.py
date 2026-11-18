@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.budget import evaluate_budget, read_transcript_usage
 from core.event_log import log_event
 from core.facts_engine import (
     DEFAULT_SAVED_TOKENS_PER_LOOP_STOP,
@@ -33,13 +34,15 @@ RECOVERY_WINDOW = 10  # tool calls a failed command stays eligible for auto-lear
 MUTATING_TOOLS = {
     "Edit", "Write", "MultiEdit", "NotebookEdit",
     "edit_file", "write_file", "replace_file_content", "multi_replace_file_content", "write_to_file",
-    "write", "edit", "apply_patch",
+    "write", "edit", "apply_patch", "patch",
 }
+# Shell-command tools across hosts (Antigravity, Claude Code, OpenClaw, Hermes `terminal`).
+COMMAND_TOOLS = {"run_command", "Bash", "bash", "execute_command", "exec", "terminal"}
 READ_ONLY_DIAGNOSTIC_TOOLS = {
     "Read", "read_file", "Grep", "grep", "Glob", "glob", "read_resource",
     "list_resources", "list_plugin_accounts", "view", "cat",
     "search_web", "web_search", "web_fetch", "mcp__openclaw__web_fetch",
-    "mcp__openclaw__read", "fetch", "find",
+    "mcp__openclaw__read", "fetch", "find", "search_files", "web_extract",
 }
 FILE_READ_TOOLS = {"Read", "read_file", "view_file", "view", "mcp__openclaw__read", "read"}
 POLLING_ACTIONS = {"poll", "status", "checkpoint_status"}
@@ -59,7 +62,11 @@ CONFIG_KEYS = {
     "max_identical_calls": "CENTSIBLE_MAX_IDENTICAL_CALLS",
     "min_recovery_failures": "CENTSIBLE_MIN_RECOVERY_FAILURES",
     "min_tool_recovery_failures": "CENTSIBLE_MIN_TOOL_RECOVERY_FAILURES",
+    # Budgets are off (0) unless set; they are not part of the mode presets.
+    "session_budget_tokens": "CENTSIBLE_SESSION_BUDGET_TOKENS",
+    "session_budget_calls": "CENTSIBLE_SESSION_BUDGET_CALLS",
 }
+BUDGET_KEYS = ("session_budget_tokens", "session_budget_calls")
 MODE_ENV = "CENTSIBLE_LOOP_MODE"
 DEFAULT_MODE = "normal"
 # ultra = trips early, weak = tolerant of long debugging streaks.
@@ -188,7 +195,11 @@ def resolve_threshold(key: str) -> int:
             continue
         if value >= 1:
             return value
-    return MODES[resolve_mode()][key]
+    return MODES[resolve_mode()].get(key, 0)
+
+
+def budget_enabled() -> bool:
+    return any(resolve_threshold(k) > 0 for k in BUDGET_KEYS)
 
 
 def resolve_error_markers() -> List[str]:
@@ -355,6 +366,12 @@ class LoopGuard:
             "session_mutations": 0,
             "facts_added_in_session": False,
             "wrapup_nudged": False,
+            "budget_tokens": 0,  # measured from the host transcript
+            "budget_tokens_est": 0,  # estimated from tool I/O (hosts without a transcript)
+            "budget_offset": 0,
+            "budget_msg_ids": [],
+            "budget_warned": False,
+            "budget_stopped": False,
         }
 
     def _load_state(self) -> Dict[str, Any]:
@@ -412,6 +429,7 @@ class LoopGuard:
         tool_call: Dict[str, Any],
         engine: Optional[FactsEngine] = None,
         block_hints: bool = False,
+        transcript_path: Optional[str] = None,
     ) -> Tuple[str, Optional[str]]:
         """
         Check before a tool executes.
@@ -419,12 +437,26 @@ class LoopGuard:
         decision is 'allow', 'ask', or 'deny'.
         A micro-fact hint on a CLI command is 'allow' + reason (the host injects it as context and the command
         still runs); only hosts that cannot inject context pass block_hints=True to get 'ask' instead.
+        `transcript_path` (Claude Code) lets the session budget use measured token usage.
         """
         tool_name = tool_call.get("name", "")
         args = tool_call.get("args", {})
         call_hash = self._compute_call_hash(tool_name, args)
 
         state = self._load_state()
+
+        # Session budget (opt-in): a reached limit blocks every further call; the warning rides the final 'allow'.
+        budget_warning = None
+        if budget_enabled():
+            level, budget_msg = self._check_budget(state, transcript_path)
+            if level == "stop":
+                if not state.get("budget_stopped"):
+                    state["budget_stopped"] = True
+                    log_event("budget_stop", self.conversation_id, tool=tool_name)
+                self._save_state(state)
+                return "deny", budget_msg
+            if level == "warn" and not state.get("budget_warned"):
+                budget_warning = budget_msg
 
         if state.get("last_call_hash") == call_hash:
             state["consecutive_identical_count"] = state.get("consecutive_identical_count", 1) + 1
@@ -590,8 +622,26 @@ class LoopGuard:
                 log_event("hint", self.conversation_id, tool=tool_name, decision=decision, fact_ids=[bomb_id])
                 return decision, bomb_reason
 
+        if budget_warning:
+            state["budget_warned"] = True
+            log_event("budget_warn", self.conversation_id, tool=tool_name)
         self._save_state(state)
-        return "allow", None
+        return "allow", budget_warning
+
+    def _check_budget(self, state: Dict[str, Any], transcript_path: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        """Refresh measured usage from the transcript (if any) into `state`, then evaluate the limits."""
+        if transcript_path:
+            delta, offset, seen = read_transcript_usage(
+                Path(transcript_path), int(state.get("budget_offset", 0)), list(state.get("budget_msg_ids", []))
+            )
+            state["budget_tokens"] = int(state.get("budget_tokens", 0)) + delta
+            state["budget_offset"], state["budget_msg_ids"] = offset, seen
+        measured = int(state.get("budget_tokens", 0))
+        used = measured if measured > 0 else int(state.get("budget_tokens_est", 0))
+        return evaluate_budget(
+            used, measured > 0, int(state.get("session_tool_calls", 0)),
+            resolve_threshold("session_budget_tokens"), resolve_threshold("session_budget_calls"),
+        )
 
     @_state_locked
     def record_post_tool_use(
@@ -599,13 +649,17 @@ class LoopGuard:
         tool_call: Dict[str, Any],
         error: Optional[str] = None,
         engine: Optional[FactsEngine] = None,
+        io_tokens: int = 0,
     ) -> None:
-        """Record outcome after tool execution and update repository telemetry."""
+        """Record outcome after tool execution and update repository telemetry.
+        `io_tokens` (estimated size of the call's input + output) feeds the session budget on hosts without a transcript."""
         state = self._load_state()
+        if io_tokens > 0:
+            state["budget_tokens_est"] = int(state.get("budget_tokens_est", 0)) + int(io_tokens)
         args = tool_call.get("args") or {}
         cmd = args.get("CommandLine") or args.get("command")
         tool_name = tool_call.get("name", "")
-        is_cmd = tool_name in ("run_command", "Bash", "bash", "execute_command", "exec")
+        is_cmd = tool_name in COMMAND_TOOLS
         prev_errors = state.get("consecutive_errors_count", 0)
 
         if error:

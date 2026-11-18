@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from core.transcript import _parse_ts, analyze_transcript, claude_project_dir, compare_baseline
 from core.fact_audit import replay_facts, verify_facts
+from core.fact_tune import apply_suggestions, tune_facts
 from core.event_log import read_events, summarize_events
 from core.facts_engine import FactsEngine, derive_summary, get_global_facts_path
 from core.loop_guard import (AUTO_LEARN_ENV, CONFIG_KEYS, INJECT_CHOICES, INJECT_ENV, MODE_ENV, MODES, REFLECT_ENV, get_config_path, load_config, normalize_reflect_mode, resolve_inject_mode, resolve_mode, resolve_reflect, resolve_threshold, save_config)
@@ -186,6 +187,9 @@ def cmd_facts(args, engine, facts_parser) -> int:
     elif args.facts_action == "replay":
         return _facts_replay(args, engine)
 
+    elif args.facts_action == "tune":
+        return _facts_tune(args, engine)
+
     else:
         facts_parser.print_help()
         return 1
@@ -235,6 +239,37 @@ def _facts_replay(args, engine) -> int:
     return 0
 
 
+def _facts_tune(args, engine) -> int:
+    from datetime import timedelta
+    tdir = Path(args.transcripts).expanduser() if args.transcripts else claude_project_dir(Path.cwd())
+    if args.transcripts and not tdir.is_dir():
+        print(f"✗ No transcripts at {tdir}.", file=sys.stderr)
+        return 1
+    project = Path.cwd().resolve().name
+    evs = [e for e in read_events(since=datetime.utcnow() - timedelta(days=args.days)) if e.get("project") == project]
+    result = tune_facts(engine.list_facts(), tdir, args.days, evs, min_hits=args.min_hits)
+    sugg = result["suggestions"]
+    applied = apply_suggestions(engine, sugg) if args.apply else []
+    if args.json:
+        print(json.dumps(dict(result, applied=applied), indent=2, ensure_ascii=False))
+        return 0
+    print(f"=== Facts Tune === {len(engine.list_facts())} fact(s), {result['history_events']} past prompt/tool event(s)")
+    if not sugg:
+        print("✓ Nothing to tune: no fact is noisy, dead, redundant or duplicated by the available evidence.")
+        return 0
+    for s in sugg:
+        tag = "[auto]" if s["applicable"] else "[manual]"
+        print(f"• {s['action'].upper():6} {tag} [{s['id']}] {s['pattern']}")
+        print(f"  {s['reason']}")
+        if s.get("new_pattern"):
+            print(f"  -> {s['new_pattern']}  (past fires {s['fires_before']} -> {s['fires_after']})")
+    if args.apply:
+        print("\n" + ("\n".join(f"✓ {line}" for line in applied) if applied else "Nothing applied."))
+    elif any(s["applicable"] for s in sugg):
+        print("\nRun with --apply to perform the [auto] suggestions; [manual] ones need a human edit.")
+    return 0
+
+
 def cmd_status(args, engine) -> int:
     summary = engine.get_metrics_summary()
     print("=== Centsible Status 🪙 ===")
@@ -252,6 +287,12 @@ def cmd_status(args, engine) -> int:
     cmd_rate_str = f" | {summary.get('first_try_cmd_rate', 100.0):.1f}% cmd" if summary.get("command_calls_total", 0) > 0 else ""
     print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% tools{cmd_rate_str} ({summary['tool_calls_total']} calls)")
     print(f"• Loop Guard:     Enabled (mode {resolve_mode()}: {resolve_threshold('max_identical_calls')} identical, {resolve_threshold('max_consecutive_errors')} errors)")
+    b_tok, b_calls = resolve_threshold("session_budget_tokens"), resolve_threshold("session_budget_calls")
+    if b_tok or b_calls:
+        parts = ([f"{b_tok:,} tokens"] if b_tok else []) + ([f"{b_calls:,} tool calls"] if b_calls else [])
+        print(f"• Session Budget: {' / '.join(parts)} (warn at 80%, then tool calls are blocked)")
+    else:
+        print("• Session Budget: off (centsible config set session_budget_tokens <N>)")
     print("• Status:         Active")
     if summary['total_facts'] == 0:
         print("• Tip:            No facts found. Run '/centsible-harvest' or 'centsible harvest' to discover golden facts.")
@@ -263,7 +304,7 @@ def cmd_harvest(args, engine) -> int:
     if args.prompt:
         prompt_text = (
             "You are the Centsible Fact Harvester 🪙.\n"
-            "Systematically explore this repository and capture 3 to 5 high-signal Golden Micro-Facts "
+            "Systematically explore this repository and capture 0 to 5 high-signal Golden Micro-Facts "
             "to maximize future token efficiency and prevent agent trial-and-error loops.\n\n"
             "Zero-Waste Golden Rules:\n"
             "- ZERO TRIVIAL FACTS: Never save standard commands ('npm test', 'git status', 'python main.py'). "
@@ -288,7 +329,7 @@ def cmd_harvest(args, engine) -> int:
         print("To rerun discovery, pass '--force' or run '/centsible-harvest' in your agent.")
         return 0
 
-    print("\nTo harvest 5-8 golden architectural facts for this repo:")
+    print("\nTo harvest up to 5 non-obvious facts for this repo (0 if it follows standard conventions):")
     print("  1. In Claude Code:    Type '/centsible-harvest'")
     print("  2. In Antigravity:    Ask your agent: \"Run centsible harvest to discover golden facts\"")
     print("  3. View Raw Prompt:   Run 'centsible harvest --prompt'")

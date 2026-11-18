@@ -172,3 +172,33 @@ def handle_install(dry_run: bool = False) -> int:
     print("🎉 Centsible installation complete!")
     print("Test your install with: centsible status")
     return 0
+
+
+# Hermes event -> centsible hook subcommand. pre_verify only fires on turns where the agent edited code.
+HERMES_EVENTS = (
+    ("pre_llm_call", "hermes-prompt"),
+    ("pre_tool_call", "hermes-pre-tool"),
+    ("post_tool_call", "hermes-post-tool"),
+    ("pre_verify", "hermes-verify"),
+)
+
+
+def hermes_hooks_yaml() -> str:
+    """The `hooks:` block for a Hermes profile config.yaml, pointing at this install with the current interpreter
+    (Hermes runs the command without a shell, and Windows cannot run the extension-less launcher directly)."""
+    launcher = REPO_ROOT / "bin" / "centsible"
+    lines = ["hooks:"]
+    for event, sub in HERMES_EVENTS:
+        lines += [f"  {event}:", f"    - command: '\"{sys.executable}\" \"{launcher}\" hook {sub}'", "      timeout: 10"]
+    return "\n".join(lines) + "\n"
+
+
+def print_hermes_hooks() -> int:
+    """Print the Hermes hooks block and how to enable it. Edits nothing: config.yaml belongs to the user."""
+    print("# Add to your Hermes profile config.yaml ($HERMES_HOME/config.yaml; merge into an existing `hooks:` key):\n")
+    print(hermes_hooks_yaml())
+    print("# Then approve the hooks once: start `hermes` and accept the prompt, or run `hermes hooks list` to check")
+    print("# their consent status. `hermes hooks doctor` verifies each hook runs and returns valid JSON.")
+    print("# Note: Hermes cannot attach context to a tool call it lets through, so a one-time fact hint or loop/budget")
+    print("# message blocks that one call; the agent sees the message as the tool result and retries.")
+    return 0

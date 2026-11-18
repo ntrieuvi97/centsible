@@ -14,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.facts_engine import estimate_tokens
-from core.loop_guard import MUTATING_TOOLS, extract_error_from_payload
+from core.loop_guard import COMMAND_TOOLS, MUTATING_TOOLS, extract_error_from_payload
 
 
 def _blocks(step: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -112,7 +112,7 @@ def analyze_transcript(transcript_path: Path) -> Dict[str, Any]:
         for tc in tool_calls:
             stats["tool_calls"] += 1
             t_name = str(tc.get("name") or tc.get("tool") or "")
-            is_cmd = t_name in ("run_command", "Bash", "bash", "execute_command", "exec")
+            is_cmd = t_name in COMMAND_TOOLS
             if not saw_first_cmd:
                 if is_cmd:
                     saw_first_cmd = True

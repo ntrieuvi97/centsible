@@ -3,11 +3,11 @@
 **Repo memory and loop guard for AI coding agents, with savings reported as *verified* vs *estimated*.** Centsible stores one-line repo facts, injects each only when the situation matches, stops runaway retry loops, and tells you how many tokens it actually saved. Standard library only.
 
 [![CI](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml/badge.svg)](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml)
-[![Version: 0.9.0](https://img.shields.io/badge/Version-0.9.0-orange.svg)](#)
+[![Version: 0.10.0](https://img.shields.io/badge/Version-0.10.0-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-green.svg)](https://www.python.org/)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
-[![Works with: Claude Code | Antigravity | OpenClaw](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Antigravity%20%7C%20OpenClaw-purple.svg)](#quickstart)
+[![Works with: Claude Code | Antigravity | OpenClaw | Hermes](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Antigravity%20%7C%20OpenClaw%20%7C%20Hermes-purple.svg)](#quickstart)
 
 ---
 
@@ -76,10 +76,20 @@ pip install git+https://github.com/ntrieuvi97/centsible.git
 centsible stats
 ```
 
+### Hermes Agent
+
+```bash
+centsible install --hermes   # prints a `hooks:` block; edits nothing
+```
+
+Merge the printed block into your profile's `config.yaml` (`$HERMES_HOME/config.yaml`), then approve the hooks once (start `hermes` and accept the prompt; `hermes hooks doctor` checks them). Centsible uses four Hermes shell hooks: `pre_llm_call` (fact injection), `pre_tool_call` (loop guard, budget, tool hints), `post_tool_call` (telemetry and recovery learning) and `pre_verify` (one save-the-gotcha nudge on turns that edited code).
+
+Two differences from Claude Code: Hermes cannot attach context to a tool call it lets through, so a one-time fact hint blocks that one call and the agent retries with the hint as the tool result. Facts are also resolved from the directory Hermes runs in, so start Hermes from the repo.
+
 ### First five minutes
 
 ```bash
-centsible harvest                 # scan a fresh repo and propose 5 to 8 starting facts
+centsible harvest                 # scan a fresh repo and propose up to 5 starting facts (0 if nothing is unusual)
 centsible facts add --pattern "pytest.{0,40}(fail|error)" --fact "Run with 'pytest tests/ -q --tb=short'."
 centsible facts test "why does pytest fail?"   # preview which facts would fire
 centsible stats                   # see what it saved
@@ -98,15 +108,22 @@ centsible facts test "<prompt>"
 centsible facts prune [--days 30] [--min-hits 20] [--dry-run]   # remove stale or zero-utility facts
 centsible facts verify [--root DIR]                  # files named in facts still exist? exit 1 if a path is stale
 centsible facts replay [--days 30] [--transcripts DIR]   # replay past sessions: which facts never fire, fire too often, or are redundant
+centsible facts tune [--days 30] [--transcripts DIR] [--apply]   # suggest remove / narrow / merge from hits, applies and past sessions
 centsible facts remove <id_or_pattern>
 
 centsible config mode ultra            # loop guard preset: ultra | normal | weak
 centsible config reflect inline        # inline (default, zero extra turns) | hook | off
 centsible config set max_consecutive_errors 4
+centsible config set session_budget_tokens 2000000   # per-session budget: warn at 80%, then block tool calls
+centsible config set session_budget_calls 300
 centsible config list
 ```
 
 Writing a good pattern: anchor on an identifier (`deploy_staging`, `run-e2e`, `a/b.py`), a tool plus a symptom (`pytest.{0,40}(fail|error)`), or an action plus object plus context. `--force` overrides the check for deliberately broad patterns.
+
+`facts tune` only changes facts with `--apply`, and only the suggestions marked `[auto]`: removing facts that never fired or are redundant, removing exact duplicates, and dropping a `a|b` branch that fired in 3+ past sessions where the fact was never applied while another branch was. Everything else is printed as `[manual]`.
+
+Session budgets are off by default. Token usage is measured from the transcript where the host provides one (Claude Code; cached reads count at 10%). On other hosts it is estimated from tool input and output only, which undercounts, so prefer `session_budget_calls` there. Once a limit is reached every further tool call in that session is blocked until you raise or unset it. `budget_warn` / `budget_stop` appear in `centsible events`.
 
 Per-fact counters (`hits`, `attributed_hits`, ...) are stored beside the facts in `facts.stats.json`, so the facts file only changes when you change a fact and is safe to commit. Add `facts.stats.json` and `metrics.json` to `.gitignore`. Counters from older versions move over automatically on the next write.
 

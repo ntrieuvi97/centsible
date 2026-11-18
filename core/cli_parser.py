@@ -37,6 +37,12 @@ def build_parser():
     hook_sub.add_parser("claude-post-tool-failure", help="Claude Code PostToolUseFailure hook")
     hook_sub.add_parser("claude-stop", help="Claude Code Stop hook")
 
+    # Hermes shell hooks (config.yaml `hooks:` block; see `centsible install --hermes`)
+    hook_sub.add_parser("hermes-prompt", help="Hermes pre_llm_call hook")
+    hook_sub.add_parser("hermes-pre-tool", help="Hermes pre_tool_call hook")
+    hook_sub.add_parser("hermes-post-tool", help="Hermes post_tool_call hook")
+    hook_sub.add_parser("hermes-verify", help="Hermes pre_verify hook")
+
     # Facts group
     facts_parser = subparsers.add_parser("facts", help="Manage repository micro-facts")
     facts_sub = facts_parser.add_subparsers(dest="facts_action")
@@ -82,6 +88,14 @@ def build_parser():
     facts_replay.add_argument("--days", type=int, default=30, help="Only sessions modified in the last N days (default: 30)")
     facts_replay.add_argument("--json", action="store_true", help="Output results as JSON")
 
+    # facts tune
+    facts_tune = facts_sub.add_parser("tune", help="Suggest facts to remove, narrow or merge, from hit/apply counts, the event log and past sessions")
+    facts_tune.add_argument("--transcripts", help="Dir of session transcripts (.jsonl); default: this repo's Claude Code transcripts")
+    facts_tune.add_argument("--days", type=int, default=30, help="Only sessions and events from the last N days (default: 30)")
+    facts_tune.add_argument("--min-hits", type=int, default=20, help="A fact shown this often with <5%% applied counts as noisy (default: 20)")
+    facts_tune.add_argument("--apply", action="store_true", help="Perform the suggestions marked [auto] (default: report only)")
+    facts_tune.add_argument("--json", action="store_true", help="Output suggestions as JSON")
+
     # status command
     subparsers.add_parser("status", help="Show system status and facts count")
 
@@ -126,6 +140,7 @@ def build_parser():
     # install command
     install_parser = subparsers.add_parser("install", help="Install or symlink centsible CLI to user's PATH")
     install_parser.add_argument("--dry-run", action="store_true", help="Print actions without modifying files")
+    install_parser.add_argument("--hermes", action="store_true", help="Print the Hermes config.yaml `hooks:` block for this install (edits nothing)")
 
     # share command
     share_parser = subparsers.add_parser("share", help="Generate shareable savings card, badges, and social post")

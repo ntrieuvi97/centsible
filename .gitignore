@@ -11,6 +11,9 @@ te_loop_guard_*.json
 .agent_checkpoint.json
 .agents/metrics.json
 
+# Local agent/host logs
+logs/
+
 # OS files
 .DS_Store
 Thumbs.db

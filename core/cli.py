@@ -19,14 +19,25 @@ from core.hooks import (
     handle_hook_claude_pre_tool,
     handle_hook_claude_prompt,
     handle_hook_claude_stop,
+    handle_hook_hermes_post_tool,
+    handle_hook_hermes_pre_tool,
+    handle_hook_hermes_prompt,
+    handle_hook_hermes_verify,
     handle_hook_post_tool,
     handle_hook_pre_invocation,
     handle_hook_pre_tool,
     handle_hook_stop,
 )
-from core.install import ensure_cli_symlink, handle_install
+from core.install import ensure_cli_symlink, handle_install, print_hermes_hooks
 from core.share import handle_export, handle_share
 from core.transcript import analyze_transcript, claude_project_dir, compare_baseline  # noqa: F401  re-exported for tests
+
+HERMES_HOOKS = {
+    "hermes-prompt": handle_hook_hermes_prompt,
+    "hermes-pre-tool": handle_hook_hermes_pre_tool,
+    "hermes-post-tool": handle_hook_hermes_post_tool,
+    "hermes-verify": handle_hook_hermes_verify,
+}
 
 
 def main() -> int:
@@ -34,6 +45,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "install":
+        if args.hermes:
+            return print_hermes_hooks()
         return handle_install(dry_run=args.dry_run)
 
     # Route hook commands
@@ -65,6 +78,9 @@ def main() -> int:
             return 0
         elif args.hook_type == "claude-stop":
             handle_hook_claude_stop()
+            return 0
+        elif args.hook_type in HERMES_HOOKS:
+            HERMES_HOOKS[args.hook_type]()
             return 0
         else:
             hook_parser.print_help()
