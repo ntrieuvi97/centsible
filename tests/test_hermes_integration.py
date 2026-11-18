@@ -77,6 +77,17 @@ class TestHermesIntegration(unittest.TestCase):
             self.assertIn(f"  {event}:", res.stdout)
             self.assertIn(f"hook {sub}'", res.stdout)
 
+    def test_hooks_block_falls_back_to_module_when_launcher_missing(self):
+        # A pip install ships core/ and centsible/ but no bin/centsible.
+        from unittest import mock
+        import core.install as inst
+        with mock.patch.object(inst, "REPO_ROOT", Path(self.dir)):
+            block = inst.hermes_hooks_yaml()
+        self.assertIn(f"'\"{sys.executable}\" -m centsible hook hermes-pre-tool'", block)
+        self.assertNotIn("bin/centsible", block)
+        launcher = REPO_ROOT / "bin" / "centsible"
+        self.assertIn(f'"{launcher}" hook hermes-prompt', inst.hermes_hooks_yaml())
+
 
 if __name__ == "__main__":
     unittest.main()

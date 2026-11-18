@@ -185,11 +185,13 @@ HERMES_EVENTS = (
 
 def hermes_hooks_yaml() -> str:
     """The `hooks:` block for a Hermes profile config.yaml, pointing at this install with the current interpreter
-    (Hermes runs the command without a shell, and Windows cannot run the extension-less launcher directly)."""
+    (Hermes runs the command without a shell, and Windows cannot run the extension-less launcher directly).
+    A git checkout has bin/centsible; a pip install does not, so it runs `python -m centsible` instead."""
     launcher = REPO_ROOT / "bin" / "centsible"
+    target = f'"{launcher}"' if launcher.is_file() else "-m centsible"
     lines = ["hooks:"]
     for event, sub in HERMES_EVENTS:
-        lines += [f"  {event}:", f"    - command: '\"{sys.executable}\" \"{launcher}\" hook {sub}'", "      timeout: 10"]
+        lines += [f"  {event}:", f"    - command: '\"{sys.executable}\" {target} hook {sub}'", "      timeout: 10"]
     return "\n".join(lines) + "\n"
 
 
