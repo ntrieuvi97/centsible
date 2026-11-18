@@ -3,7 +3,7 @@
 **Repo memory and loop guard for AI coding agents, with savings reported as *verified* vs *estimated*.** Centsible stores one-line repo facts, injects each only when the situation matches, stops runaway retry loops, and tells you how many tokens it actually saved. Standard library only.
 
 [![CI](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml/badge.svg)](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml)
-[![Version: 0.11.1](https://img.shields.io/badge/Version-0.11.1-orange.svg)](#)
+[![Version: 0.11.2](https://img.shields.io/badge/Version-0.11.2-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-green.svg)](https://www.python.org/)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)

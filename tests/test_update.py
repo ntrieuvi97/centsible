@@ -58,7 +58,8 @@ class TestUpdate(unittest.TestCase):
         self.assertEqual(upd.detect_installs(cache), [])
 
     def test_plans(self):
-        self.assertEqual(upd.plan_steps({"kind": "pip"})[0][0][-3:], ["install", "--upgrade", "centsible"])
+        self.assertEqual(upd.plan_steps({"kind": "pip"})[0][0][-2:], ["--no-cache-dir", "centsible"])
+        self.assertEqual(upd.plan_steps({"kind": "pip"}, "0.11.1")[0][0][-1], "centsible==0.11.1")
         with mock.patch.object(upd.shutil, "which", return_value=None):
             steps, skip = upd.plan_steps({"kind": "claude-plugin", "id": "centsible@centsible"})
         self.assertEqual(steps, [])
@@ -91,6 +92,17 @@ class TestUpdate(unittest.TestCase):
         with mock.patch.object(upd.subprocess, "run") as run:
             self.assertEqual(upd.run_update(check=True, root=site), 0)
         run.assert_not_called()
+
+    def test_upgrade_that_changes_nothing_is_a_failure(self):
+        # pip exits 0 but the index lagged: the install is still behind, so this must not report success.
+        site = _fake_install(Path(self.tmp.name) / "site-packages", "0.9.0")
+        ok = subprocess.CompletedProcess([], 0, "Requirement already satisfied", "")
+        with mock.patch.object(upd.subprocess, "run", return_value=ok):
+            self.assertEqual(upd.run_update(root=site), 1)
+        (site / "core" / "__init__.py").write_text('__version__ = "0.10.1"\n')  # pip really upgraded
+        with mock.patch.object(upd, "detect_installs", return_value=[{"kind": "pip", "path": str(site), "current": "0.9.0"}]), \
+                mock.patch.object(upd.subprocess, "run", return_value=ok):
+            self.assertEqual(upd.run_update(root=site), 0)
 
 
 if __name__ == "__main__":

@@ -97,8 +97,10 @@ def _claude_plugin_version(pid: str) -> str:
         return "?"
 
 
-def plan_steps(inst: Dict[str, Any]) -> Tuple[List[List[str]], Optional[str]]:
-    """(commands to run, reason to skip). A git checkout with local edits is skipped, never overwritten."""
+def plan_steps(inst: Dict[str, Any], latest: Optional[str] = None) -> Tuple[List[List[str]], Optional[str]]:
+    """(commands to run, reason to skip). A git checkout with local edits is skipped, never overwritten.
+    For pip, the known latest version is pinned and the cache bypassed: right after a release PyPI's simple index
+    can lag its JSON API, and an unpinned upgrade then 'succeeds' without changing anything."""
     kind = inst["kind"]
     if kind == "git":
         path = inst["path"]
@@ -111,7 +113,8 @@ def plan_steps(inst: Dict[str, Any]) -> Tuple[List[List[str]], Optional[str]]:
             return [], "has uncommitted changes; commit or stash them, then rerun"
         return [["git", "-C", path, "pull", "--ff-only"]], None
     if kind == "pip":
-        return [[sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE]], None
+        spec = f"{PACKAGE}=={latest}" if latest else PACKAGE
+        return [[sys.executable, "-m", "pip", "install", "--upgrade", "--no-cache-dir", spec]], None
     if kind == "claude-plugin":
         claude = shutil.which("claude")
         if not claude:
@@ -143,7 +146,7 @@ def run_update(check: bool = False, dry_run: bool = False, root: Optional[Path] 
         if up_to_date:
             print(f"\n✓ {_label(inst)}: already v{inst['current']}")
             continue
-        steps, skip = plan_steps(inst)
+        steps, skip = plan_steps(inst, latest)
         if skip:
             print(f"\n⚠ Skipped {_label(inst)}: {skip}")
             failed += 1
@@ -163,7 +166,13 @@ def run_update(check: bool = False, dry_run: bool = False, root: Optional[Path] 
                 break
         else:
             if not dry_run:
-                print(f"  ✓ now v{_after_version(inst)}")
+                now = _after_version(inst)
+                if latest and now != "?" and parse_version(now) < parse_version(latest):
+                    print(f"  ✗ still v{now} (latest is v{latest}); PyPI can take a few minutes to serve a new "
+                          "release, rerun `centsible update` shortly")
+                    failed += 1
+                else:
+                    print(f"  ✓ now v{now}")
     if not dry_run and any(i["kind"] == "claude-plugin" for i in installs):
         print("\nRestart Claude Code to load the updated plugin.")
     return 1 if failed else 0
