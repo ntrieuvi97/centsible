@@ -3,7 +3,7 @@
 **Repo memory and loop guard for AI coding agents, with savings reported as *verified* vs *estimated*.** Centsible stores one-line repo facts, injects each only when the situation matches, stops runaway retry loops, and tells you how many tokens it actually saved. Standard library only.
 
 [![CI](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml/badge.svg)](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml)
-[![Version: 0.11.2](https://img.shields.io/badge/Version-0.11.2-orange.svg)](#)
+[![Version: 0.11.3](https://img.shields.io/badge/Version-0.11.3-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-green.svg)](https://www.python.org/)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
@@ -137,7 +137,7 @@ Session budgets are off by default. Token usage is measured from the transcript 
 
 Per-fact counters (`hits`, `attributed_hits`, ...) are stored beside the facts in `facts.stats.json`, so the facts file only changes when you change a fact and is safe to commit. Add `facts.stats.json` and `metrics.json` to `.gitignore`. Counters from older versions move over automatically on the next write.
 
-Facts live in the project's `.agents/` or `.claude/` directory when present, otherwise in `~/.centsible/projects/<repo>-<hash>/` (scoped per repo, never shared). Facts added with `--global` live in `~/.centsible/facts.jsonl`; a project fact with the same id or pattern wins. Override the root with `CENTSIBLE_HOME`.
+Facts live in the project's `.agents/` or `.claude/` directory when present, otherwise in `~/.centsible/projects/<repo>-<hash>/` (scoped per repo, never shared). Facts added with `--global` live in `~/.centsible/facts.jsonl`; a project fact with the same id or pattern wins. Override the root with `CENTSIBLE_HOME`. `stats --all` also reads in-repo facts dirs, which are remembered in `~/.centsible/repos.json` the first time a hook or `centsible stats` runs in that repo.
 
 <details>
 <summary>Example <code>centsible stats</code> output</summary>
