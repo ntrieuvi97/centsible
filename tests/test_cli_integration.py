@@ -257,6 +257,18 @@ class TestCliIntegration(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertEqual(_json.loads(res.stdout)["metrics"]["tool_calls_total"], 7)
 
+    def test_stats_all_includes_in_repo_facts(self):
+        import json as _json
+        repo = Path(self.temp_dir.name) / "repo"
+        (repo / ".claude").mkdir(parents=True)
+        (repo / ".claude" / "facts.jsonl").write_text(
+            "".join(_json.dumps({"id": f"f{i}", "fact": "x", "pattern": f"p{i}"}) + "\n" for i in range(3)))
+        self.assertEqual(_json.loads(self._run_te(["stats", "--all", "--json"]).stdout)["metrics"]["total_facts"], 0)
+        res = subprocess.run([sys.executable, str(REPO_ROOT / "core" / "cli.py"), "stats", "--json"], cwd=str(repo),
+                             env=dict(subprocess.os.environ, CENTSIBLE_HOME=self.temp_dir.name), capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(_json.loads(self._run_te(["stats", "--all", "--json"]).stdout)["metrics"]["total_facts"], 3)
+
     def test_stats_all_does_not_double_count_migrated_facts(self):
         import json as _json
         home = Path(self.temp_dir.name)

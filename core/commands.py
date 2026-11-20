@@ -17,7 +17,7 @@ from core.transcript import _parse_ts, analyze_transcript, claude_project_dir, c
 from core.fact_audit import replay_facts, verify_facts
 from core.fact_tune import apply_suggestions, tune_facts
 from core.event_log import read_events, summarize_events
-from core.facts_engine import FactsEngine, derive_summary, get_global_facts_path
+from core.facts_engine import FactsEngine, derive_summary, get_global_facts_path, register_storage, registered_storage_dirs
 from core.loop_guard import (AUTO_LEARN_ENV, CONFIG_KEYS, INJECT_CHOICES, INJECT_ENV, MODE_ENV, MODES, REFLECT_ENV, get_config_path, load_config, normalize_reflect_mode, resolve_inject_mode, resolve_mode, resolve_reflect, resolve_threshold, save_config)
 
 
@@ -28,6 +28,7 @@ def _summary_all_projects(rate: float) -> Dict[str, Any]:
     """Sum every project's summary, then fold in the legacy global bucket (~/.centsible/metrics.json)."""
     gpath = get_global_facts_path()
     dirs = sorted(d for d in (gpath.parent / "projects").glob("*") if d.is_dir())
+    dirs += [d for d in registered_storage_dirs() if d.is_dir() and d not in dirs]  # in-repo facts (.claude/, .agents/)
     total = dict.fromkeys(_SUM_KEYS, 0)
     for d in dirs:
         for k, v in FactsEngine(d / "facts.jsonl").get_metrics_summary(usd_per_mtok=rate).items():
@@ -364,6 +365,8 @@ def cmd_stats(args, engine) -> int:
         args.no_baseline = True
     else:
         summary = engine.get_metrics_summary(usd_per_mtok=args.rate)
+        if engine.storage_path.exists():
+            register_storage(engine.storage_path)  # backfill repos used before the registry existed
     transcript_report = analyze_transcript(Path(args.transcript)) if args.transcript else None
     baseline_report = None
     auto = args.baseline == "auto"

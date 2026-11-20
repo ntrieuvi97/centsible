@@ -71,6 +71,35 @@ def stats_path_for(path: Path) -> Path:
     return path.with_name(path.stem + ".stats.json")
 
 
+def _registry_path() -> Path:
+    return get_global_facts_path().with_name("repos.json")
+
+
+def registered_storage_dirs() -> List[Path]:
+    """In-repo storage dirs (`<repo>/.claude`, `.agents`) seen so far; `stats --all` reads them too."""
+    try:
+        return [Path(p) for p in json.loads(_registry_path().read_text(encoding="utf-8"))]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def register_storage(storage_path: Path) -> None:
+    """Remember a facts dir that lives outside ~/.centsible/projects so `stats --all` can find it."""
+    d = storage_path.resolve().parent
+    root = get_global_facts_path().parent
+    if d == root or root / "projects" in d.parents:
+        return
+    reg = _registry_path()
+    with file_lock(reg):
+        dirs = [str(p) for p in registered_storage_dirs()]
+        if str(d) in dirs:
+            return
+        try:
+            atomic_write_text(reg, json.dumps(dirs + [str(d)], indent=2))
+        except Exception as e:
+            debug_warn("register_storage", e)
+
+
 class FactsEngine:
     def __init__(self, storage_path: Optional[Path] = None, global_path: Optional[Path] = None):
         self.storage_path = storage_path or get_default_facts_path()
@@ -113,6 +142,7 @@ class FactsEngine:
     def update_metrics(self, **deltas: int) -> Dict[str, int]:
         """Atomically increment telemetry counters."""
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        register_storage(self.storage_path)
         with file_lock(self.metrics_path):
             metrics = self.load_metrics()
             for k, delta in deltas.items():
