@@ -29,6 +29,7 @@ from core.hooks import (
     handle_hook_stop,
 )
 from core.install import ensure_cli_symlink, handle_install, print_hermes_hooks
+from core.mcp_server import run_mcp_stdio
 from core.share import handle_export, handle_share
 from core.transcript import analyze_transcript, claude_project_dir, compare_baseline  # noqa: F401  re-exported for tests
 from core.update import run_update
@@ -106,6 +107,9 @@ def main() -> int:
 
     if args.command == "config":
         return cmd_config(args)
+
+    if args.command == "mcp":
+        return run_mcp_stdio()
 
     engine = _engine()
     handlers = {"facts": lambda: cmd_facts(args, engine, facts_parser), "status": lambda: cmd_status(args, engine),

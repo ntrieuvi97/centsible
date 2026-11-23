@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Centsible Live Dashboard</title>
+  <style>
+    :root {
+      --bg-primary: var(--color-background-primary, #ffffff);
+      --bg-secondary: var(--color-background-secondary, #f6f7f9);
+      --bg-tertiary: var(--color-background-tertiary, #eef0f4);
+      --text-primary: var(--color-text-primary, #171923);
+      --text-secondary: var(--color-text-secondary, #525866);
+      --text-tertiary: var(--color-text-tertiary, #868c98);
+      --border: var(--color-border-primary, #e2e4e9);
+      --border-soft: var(--color-border-secondary, #eceef2);
+      --ok: var(--color-text-success, #16a34a);
+      --ok-bg: var(--color-background-success, rgba(22, 163, 74, 0.12));
+      --warn: var(--color-text-warning, #d97706);
+      --warn-bg: var(--color-background-warning, rgba(217, 119, 6, 0.12));
+      --err: var(--color-text-danger, #dc2626);
+      --err-bg: var(--color-background-danger, rgba(220, 38, 38, 0.12));
+      --info: var(--color-text-info, #2563eb);
+      --info-bg: var(--color-background-info, rgba(37, 99, 235, 0.12));
+      --font: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 12px;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .header {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      color: var(--text-secondary);
+      white-space: nowrap;
+    }
+
+    .pill.live {
+      color: var(--ok);
+      background: var(--ok-bg);
+      border-color: transparent;
+    }
+
+    .pill.paused {
+      color: var(--warn);
+      background: var(--warn-bg);
+      border-color: transparent;
+    }
+
+    .pill.stale {
+      color: var(--err);
+      background: var(--err-bg);
+      border-color: transparent;
+    }
+
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .pill.live .dot {
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .seg {
+      display: inline-flex;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 2px;
+    }
+
+    .seg button, .btn, select {
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 3px 8px;
+      cursor: pointer;
+    }
+
+    .seg button.active {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      border-color: var(--border);
+    }
+
+    .btn, select {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+    }
+
+    .btn:hover, select:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    @media (max-width: 720px) {
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 10px 11px;
+      min-width: 0;
+    }
+
+    .card-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .card-value {
+      margin-top: 4px;
+      font-size: 19px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .card-sub {
+      margin-top: 3px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 8px;
+    }
+
+    @media (max-width: 720px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+
+    .section-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      gap: 8px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .mono {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .bar-track {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--bg-tertiary);
+      overflow: hidden;
+      display: flex;
+      margin: 6px 0 8px;
+    }
+
+    .bar-seg-disc { background: var(--info); }
+    .bar-seg-loop { background: var(--ok); }
+    .bar-seg-over { background: var(--warn); }
+
+    .kv-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 12px;
+    }
+
+    .kv-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 2px 0;
+      border-bottom: 1px dashed var(--border-soft);
+    }
+
+    .kv-row:last-child { border-bottom: none; }
+    .kv-k { color: var(--text-secondary); }
+    .kv-v { font-weight: 600; text-align: right; }
+
+    .table-wrap {
+      max-height: 170px;
+      overflow-y: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11.5px;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 4px 6px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    th {
+      color: var(--text-tertiary);
+      font-weight: 600;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      position: sticky;
+      top: 0;
+      background: var(--bg-secondary);
+    }
+
+    td.num, th.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      max-height: 170px;
+      overflow-y: auto;
+    }
+
+    .event-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 7px;
+      border-radius: 6px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-soft);
+      font-size: 11.5px;
+    }
+
+    .event-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .event-tag {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 4px;
+      background: var(--info-bg);
+      color: var(--info);
+      flex-shrink: 0;
+    }
+
+    .event-tag.applied { background: var(--ok-bg); color: var(--ok); }
+    .event-tag.blocked, .event-tag.loop_block { background: var(--err-bg); color: var(--err); }
+    .event-tag.warn { background: var(--warn-bg); color: var(--warn); }
+
+    .event-msg {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-primary);
+    }
+
+    .event-ts {
+      font-size: 10.5px;
+      color: var(--text-tertiary);
+      flex-shrink: 0;
+    }
+
+    .spark-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .spark-svg {
+      width: 100%;
+      height: 36px;
+      display: block;
+    }
+
+    .footer {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11px;
+      color: var(--text-tertiary);
+      padding-top: 2px;
+    }
+
+    .err-banner {
+      padding: 7px 10px;
+      border-radius: 7px;
+      background: var(--err-bg);
+      color: var(--err);
+      font-size: 12px;
+      display: none;
+    }
+
+    .empty {
+      color: var(--text-tertiary);
+      font-size: 11.5px;
+      padding: 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <span class="brand-title">Centsible Live Status</span>
+        <span id="status-pill" class="pill live"><span class="dot"></span><span id="status-text">Connecting...</span></span>
+        <span id="scope-badge" class="pill mono">-</span>
+      </div>
+      <div class="controls">
+        <div class="seg" role="group" aria-label="Scope">
+          <button id="btn-scope-project" class="active" type="button">Project</button>
+          <button id="btn-scope-all" type="button">All Projects</button>
+        </div>
+        <select id="interval-select" aria-label="Refresh interval">
+          <option value="2000">2s</option>
+          <option value="3000" selected>3s</option>
+          <option value="5000">5s</option>
+          <option value="10000">10s</option>
+        </select>
+        <button id="btn-toggle-poll" class="btn" type="button">Pause</button>
+        <button id="btn-refresh" class="btn" type="button">Refresh</button>
+      </div>
+    </div>
+
+    <div id="err-banner" class="err-banner"></div>
+
+    <div class="kpis">
+      <div class="card">
+        <div class="card-label"><span>Net Tokens Saved</span><span id="kpi-roi" class="mono">-</span></div>
+        <div id="kpi-saved-tokens" class="card-value">-</div>
+        <div id="kpi-saved-usd" class="card-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="card-label"><span>1st-Try Success</span><span id="kpi-calls" class="mono">-</span></div>
+        <div id="kpi-first-try" class="card-value">-</div>
+        <div id="kpi-cmd-rate" class="card-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="card-label"><span>Micro-Facts & Hits</span><span id="kpi-attr-rate" class="mono">-</span></div>
+        <div id="kpi-facts" class="card-value">-</div>
+        <div id="kpi-hits" class="card-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="card-label"><span>Loop Guard</span><span id="kpi-mode" class="mono">-</span></div>
+        <div id="kpi-loops" class="card-value">-</div>
+        <div id="kpi-budget" class="card-sub">-</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="section-head">
+          <span class="section-title">Token & ROI Accounting</span>
+          <span id="poll-trend-label" class="mono" style="font-size:11px;color:var(--text-tertiary);">Live history</span>
+        </div>
+        <div class="bar-track" aria-hidden="true">
+          <div id="bar-disc" class="bar-seg-disc" style="width:0%"></div>
+          <div id="bar-loop" class="bar-seg-loop" style="width:0%"></div>
+          <div id="bar-over" class="bar-seg-over" style="width:0%"></div>
+        </div>
+        <div class="kv-list">
+          <div class="kv-row"><span class="kv-k">Discovery Saved (Verified / Heuristic)</span><span id="acc-disc" class="kv-v mono">-</span></div>
+          <div class="kv-row"><span class="kv-k">Loop Guard Saved (Trace-measured)</span><span id="acc-loop" class="kv-v mono">-</span></div>
+          <div class="kv-row"><span class="kv-k">Ephemeral Injection Overhead</span><span id="acc-over" class="kv-v mono">-</span></div>
+          <div class="kv-row"><span class="kv-k">Verified Net Saved</span><span id="acc-verified" class="kv-v mono">-</span></div>
+          <div class="kv-row"><span class="kv-k">Guard Thresholds</span><span id="acc-guard" class="kv-v mono">-</span></div>
+        </div>
+        <div class="spark-box">
+          <svg id="sparkline" class="spark-svg" viewBox="0 0 300 36" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-head">
+          <span class="section-title">Agent & Event Breakdown (7d)</span>
+          <span id="events-total" class="mono" style="font-size:11px;color:var(--text-tertiary);">0 events</span>
+        </div>
+        <div id="agent-summary" class="kv-list" style="margin-bottom:8px;"></div>
+        <div class="section-head" style="margin-top:6px;margin-bottom:4px;">
+          <span class="section-title">Recent Live Events</span>
+        </div>
+        <div id="recent-events" class="event-list"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-head">
+        <span class="section-title">Top Micro-Facts Effectiveness</span>
+        <span id="facts-summary-note" class="mono" style="font-size:11px;color:var(--text-tertiary);">-</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Fact ID</th>
+              <th class="num">Shown</th>
+              <th class="num">Applied</th>
+              <th class="num">Apply Rate</th>
+            </tr>
+          </thead>
+          <tbody id="facts-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span id="footer-storage" class="mono">-</span>
+      <span id="footer-updated" class="mono">Last poll: -</span>
+    </div>
+  </div>
+  <!-- INLINE_SCRIPT -->
+</body>
+</html>

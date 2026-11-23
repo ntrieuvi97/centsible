@@ -1,6 +1,6 @@
 {
   "name": "centsible",
-  "version": "0.11.3",
+  "version": "0.12.0",
   "description": "Experience-driven cost and token optimization for Claude Code and Antigravity",
   "author": {
     "name": "Vi Nguyen",
@@ -11,5 +11,6 @@
   "license": "MIT",
   "hooks": [
     "./claude-hooks.json"
-  ]
+  ],
+  "types": "./types/index.d.ts"
 }

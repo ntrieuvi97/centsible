@@ -26,3 +26,4 @@ env/
 # Test & package manager caches
 .dsh-e2e/
 .pnpm-store/
+node_modules/

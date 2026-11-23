@@ -97,7 +97,11 @@ def build_parser():
     facts_tune.add_argument("--json", action="store_true", help="Output suggestions as JSON")
 
     # status command
-    subparsers.add_parser("status", help="Show system status and facts count")
+    status_parser = subparsers.add_parser("status", help="Show system status and facts count")
+    status_parser.add_argument("--json", action="store_true", help="Output status as JSON")
+
+    # mcp command (MCP Apps stdio server for Antigravity & Claude)
+    subparsers.add_parser("mcp", help="Run the MCP Apps stdio server for the live dashboard")
 
     # harvest command
     harvest_parser = subparsers.add_parser("harvest", help="Display or output agentic fact harvest instructions")

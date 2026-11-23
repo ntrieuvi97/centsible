@@ -3,7 +3,7 @@
 **Repo memory and loop guard for AI coding agents, with savings reported as *verified* vs *estimated*.** Centsible stores one-line repo facts, injects each only when the situation matches, stops runaway retry loops, and tells you how many tokens it actually saved. Standard library only.
 
 [![CI](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml/badge.svg)](https://github.com/ntrieuvi97/centsible/actions/workflows/ci.yml)
-[![Version: 0.11.3](https://img.shields.io/badge/Version-0.11.3-orange.svg)](#)
+[![Version: 0.12.0](https://img.shields.io/badge/Version-0.12.0-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python: 3.9+](https://img.shields.io/badge/python-3.9%2B-green.svg)](https://www.python.org/)
 [![Dependencies: none](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#)
@@ -107,7 +107,8 @@ centsible stats                   # see what it saved
 ## CLI cheat sheet
 
 ```bash
-centsible status
+centsible status [--json]
+centsible mcp                                             # run the MCP Apps live dashboard server (Antigravity & Claude)
 centsible update [--check] [--dry-run]                  # update every install (plugin, git, pip) to the latest release
 centsible stats [--all] [--rate 3.0] [--transcript session.jsonl] [--baseline DIR] [--since 2026-11-04] [--no-baseline]
 centsible events [--days 7] [--agent main] [--json]    # hint/block/apply counts; flags facts shown >=20x but never applied
@@ -187,12 +188,33 @@ Fact patterns themselves are plain regexes and work in any language.
 - Savings figures labelled *Heuristic* are estimates. Treat *Verified* and *Trace-measured* as the numbers you can rely on.
 - Transcript analysis supports the agents listed above; other agents may need `--transcript`.
 
+## Live Dashboard (Antigravity & Claude)
+
+Centsible ships a zero-dependency MCP Apps (`SEP-1865`) server (`centsible mcp`) that renders a realtime status, ROI, loop guard, and event dashboard directly inside **Google Antigravity** (inline, side pane `+` → *Centsible Status*, or left sidebar) and **Claude** (Claude Code plugin via `.mcp.json` or Claude Desktop).
+
+- **Antigravity & Claude Code plugins:** wired automatically via [mcp_config.json](mcp_config.json) and [.mcp.json](.mcp.json). Run `/centsible-dashboard` or ask the agent to open the Centsible dashboard.
+- **Claude Code terminal pane:** with the plugin installed, run `/cs-dashboard` (or `/centsible:cs-dashboard`) to open a live pane with net tokens saved, loop-guard interventions, fact hits, tool-call success rate and recent events. It reads `~/.centsible/` (or `$CENTSIBLE_HOME`) every 3 seconds and does nothing until you run the command.
+- **Claude Desktop:** add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "centsible": {
+      "command": "centsible",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ## Develop
 
 ```bash
 git clone https://github.com/ntrieuvi97/centsible.git && cd centsible
 python3 -m pip install -e . pytest
 python3 -m pytest -q          # or: python3 -m unittest discover tests
+# To rebuild core/dashboard.html after editing dashboard/src/:
+npm --prefix dashboard install && npm --prefix dashboard run build
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Related project: [Thauthi](https://github.com/ntrieuvi97/thauthi), runtime-aware tooling for AI coding agents.

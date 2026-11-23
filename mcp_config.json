@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "centsible": {
+      "command": "python3",
+      "args": ["${PLUGIN_ROOT}/bin/centsible", "mcp"]
+    }
+  }
+}

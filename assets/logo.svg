@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <!-- Square 128x128 with ~10% margin and transparent background, high contrast on light & dark themes -->
+  <circle cx="64" cy="64" r="50" fill="#F59E0B" stroke="#1F2937" stroke-width="5"/>
+  <circle cx="64" cy="64" r="41" fill="none" stroke="#FEF3C7" stroke-width="2.5" stroke-opacity="0.7"/>
+  <!-- Crisp lightning bolt / token efficiency emblem -->
+  <path d="M70 28L42 68h20l-6 32 30-42H66l4-30z" fill="#111827" stroke="#FFFBEB" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

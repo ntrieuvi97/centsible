@@ -1,7 +1,14 @@
 {
   "name": "centsible",
-  "version": "0.11.3",
+  "displayName": "Centsible",
+  "version": "0.12.0",
   "description": "Experience-driven cost and token optimization for AI coding agents (Antigravity & Claude Code)",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Open the Centsible live dashboard to inspect token savings, loop guard, and recent events",
+    "Check Centsible status and list active repository micro-facts",
+    "Run centsible harvest to discover golden micro-facts for this repository"
+  ],
   "author": "Vi Nguyen (@ntrieuvi97)",
   "homepage": "https://github.com/ntrieuvi97/centsible",
   "repository": {

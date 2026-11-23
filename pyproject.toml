@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "centsible"
-version = "0.11.3"
+version = "0.12.0"
 description = "Repo memory and loop guard for AI coding agents, with savings reported as verified vs estimated. Zero dependencies."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -37,4 +37,4 @@ where = ["."]
 include = ["core*", "centsible*"]
 
 [tool.setuptools.package-data]
-core = ["triggers.json"]
+core = ["triggers.json", "dashboard.html"]

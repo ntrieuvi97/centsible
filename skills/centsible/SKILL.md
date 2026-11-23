@@ -18,9 +18,11 @@ Requires the `centsible` CLI: `pip install centsible` (Python 3.9+, no dependenc
 
 ## Commands
 
-### 1. Check Status & Token ROI Stats
+### 1. Check Status, Live Dashboard & Token ROI Stats
+- Call the `open_dashboard` MCP tool (exposed by the `centsible` MCP server) to render the interactive realtime dashboard in Antigravity (or use the side pane `+` → *Centsible Status*).
 ```bash
 centsible status
+centsible status --json
 centsible stats
 centsible stats --transcript <path_to_transcript.jsonl> --json
 ```

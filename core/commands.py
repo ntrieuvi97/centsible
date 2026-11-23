@@ -273,6 +273,25 @@ def _facts_tune(args, engine) -> int:
 
 def cmd_status(args, engine) -> int:
     summary = engine.get_metrics_summary()
+    b_tok, b_calls = resolve_threshold("session_budget_tokens"), resolve_threshold("session_budget_calls")
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "active": True,
+            "storage_path": str(engine.storage_path),
+            "metrics": summary,
+            "loop_guard": {
+                "mode": resolve_mode(),
+                "reflect": resolve_reflect(),
+                "inject_mode": resolve_inject_mode(),
+                "max_identical_calls": resolve_threshold("max_identical_calls"),
+                "max_consecutive_errors": resolve_threshold("max_consecutive_errors"),
+            },
+            "session_budget": {
+                "tokens": b_tok,
+                "calls": b_calls,
+            },
+        }, ensure_ascii=False, indent=2))
+        return 0
     print("=== Centsible Status 🪙 ===")
     print(f"• Facts Storage:  {engine.storage_path}")
     print(f"• Total Facts:    {summary['total_facts']}")
@@ -288,7 +307,6 @@ def cmd_status(args, engine) -> int:
     cmd_rate_str = f" | {summary.get('first_try_cmd_rate', 100.0):.1f}% cmd" if summary.get("command_calls_total", 0) > 0 else ""
     print(f"• 1st-Try Rate:   {summary['first_try_success_rate']:.1f}% tools{cmd_rate_str} ({summary['tool_calls_total']} calls)")
     print(f"• Loop Guard:     Enabled (mode {resolve_mode()}: {resolve_threshold('max_identical_calls')} identical, {resolve_threshold('max_consecutive_errors')} errors)")
-    b_tok, b_calls = resolve_threshold("session_budget_tokens"), resolve_threshold("session_budget_calls")
     if b_tok or b_calls:
         parts = ([f"{b_tok:,} tokens"] if b_tok else []) + ([f"{b_calls:,} tool calls"] if b_calls else [])
         print(f"• Session Budget: {' / '.join(parts)} (warn at 80%, then tool calls are blocked)")

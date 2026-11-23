@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "centsible": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/centsible",
+      "args": ["mcp"]
+    }
+  }
+}
