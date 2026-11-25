@@ -1,0 +1,3 @@
+{
+  "install": "python3 -m pip install --no-input -e . pytest && if command -v npm >/dev/null 2>&1; then npm --prefix dashboard ci --no-audit --no-fund; fi"
+}
